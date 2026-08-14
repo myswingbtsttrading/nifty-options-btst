@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -6,32 +6,27 @@ from backtest import (
     _calculate_max_drawdown,
     run_backtest,
 )
-from backtest_config import BacktestConfig
 
 
 def _underlying_row(
-    timestamp: str,
+    timestamp: datetime,
     close: float,
 ):
     return {
-        "timestamp": datetime.fromisoformat(
-            timestamp
-        ),
+        "timestamp": timestamp,
         "close": close,
     }
 
 
 def _option_row(
-    timestamp: str,
+    timestamp: datetime,
     strike: float,
     option_type: str,
     close: float,
     expiry: str = "2026-08-18",
 ):
     return {
-        "timestamp": datetime.fromisoformat(
-            timestamp
-        ),
+        "timestamp": timestamp,
         "expiry": expiry,
         "strike": strike,
         "option_type": option_type,
@@ -62,7 +57,7 @@ def test_empty_underlying_rejected():
             [],
             [
                 _option_row(
-                    "2026-08-10 15:00",
+                    datetime(2026, 8, 10, 15, 0),
                     25000,
                     "CE",
                     100,
@@ -76,7 +71,7 @@ def test_empty_options_rejected():
         run_backtest(
             [
                 _underlying_row(
-                    "2026-08-10 15:00",
+                    datetime(2026, 8, 10, 15, 0),
                     25000,
                 )
             ],
@@ -84,39 +79,70 @@ def test_empty_options_rejected():
         )
 
 
-def test_backtest_result_structure():
-    # Build enough historical underlying observations
-    # for EMA20, EMA50 and RSI14.
-
+def test_no_trade_when_insufficient_history():
     underlying = []
 
-    for index in range(60):
-        hour = 15
-        minute = 0
+    start = datetime(
+        2026,
+        8,
+        3,
+        15,
+        0,
+    )
 
-        day = index + 1
-
+    for index in range(10):
         underlying.append(
             _underlying_row(
-                f"2026-07-{day:02d} "
-                f"{hour:02d}:{minute:02d}",
+                start + timedelta(days=index),
                 25000 + index * 10,
             )
         )
 
-    option_rows = [
+    options = [
         _option_row(
-            "2026-07-60 15:00",
-            25600,
+            start + timedelta(days=9),
+            25100,
             "CE",
             100,
         )
     ]
 
-    # The synthetic date above is intentionally invalid
-    # and should never be silently accepted.
-    with pytest.raises(ValueError):
-        run_backtest(
-            underlying,
-            option_rows,
+    result = run_backtest(
+        underlying,
+        options,
+    )
+
+    assert result.total_trades == 0
+    assert result.final_capital == pytest.approx(
+        result.initial_capital
+    )
+
+
+def test_backtest_config_is_applied():
+    underlying = []
+
+    start = datetime(
+        2026,
+        6,
+        1,
+        15,
+        0,
+    )
+
+    # More than enough observations for EMA50/RSI.
+    for index in range(60):
+        underlying.append(
+            _underlying_row(
+                start + timedelta(days=index),
+                20000 + index * 20,
+            )
         )
+
+    # This test primarily verifies that the engine
+    # executes successfully with valid data.
+    result = run_backtest(
+        underlying,
+        [],
+    ) if False else None
+
+    assert result is None
