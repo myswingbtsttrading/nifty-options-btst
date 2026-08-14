@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -17,14 +16,6 @@ def generate_signal(
     rsi: float,
     previous_close: float,
 ) -> NiftySignal:
-    """
-    Initial NIFTY directional signal engine.
-
-    This is deliberately simple in Phase 1.
-    We will NOT call this production-ready until
-    it has been historically backtested.
-    """
-
     if nifty_price <= 0:
         raise ValueError("NIFTY price must be positive.")
 
@@ -40,15 +31,11 @@ def generate_signal(
 
     if nifty_price > ema20 > ema50:
         bullish_score += 2
-        reasons.append(
-            "NIFTY above EMA20 above EMA50"
-        )
+        reasons.append("NIFTY above EMA20 above EMA50")
 
     elif nifty_price < ema20 < ema50:
         bearish_score += 2
-        reasons.append(
-            "NIFTY below EMA20 below EMA50"
-        )
+        reasons.append("NIFTY below EMA20 below EMA50")
 
     if rsi >= 55:
         bullish_score += 1
