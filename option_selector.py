@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from datetime import date
-from typing import Optional
 
 from config import STRIKE_INTERVAL
 
@@ -15,10 +14,6 @@ class OptionContract:
 def round_to_strike(
     nifty_price: float,
 ) -> float:
-    """
-    Round NIFTY to the nearest valid 50-point strike.
-    """
-
     if nifty_price <= 0:
         raise ValueError(
             "NIFTY price must be positive."
@@ -37,10 +32,6 @@ def select_atm_contract(
     expiry: date,
     option_type: str,
 ) -> OptionContract:
-    """
-    Select the ATM NIFTY CE or PE.
-    """
-
     option_type = option_type.upper()
 
     if option_type not in {"CE", "PE"}:
