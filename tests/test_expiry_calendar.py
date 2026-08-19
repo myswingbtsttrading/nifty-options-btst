@@ -1,7 +1,5 @@
 from datetime import date
 
-import pytest
-
 from expiry_calendar import (
     candidate_monthly_expiries,
     get_monthly_expiry_for_trade,
@@ -92,8 +90,8 @@ def test_trade_after_expiry_moves_to_next_month():
 
     assert result == date(
         2017,
-            2,
-            23,
+        2,
+        23,
     )
 
 
@@ -124,9 +122,7 @@ def test_candidate_expiries_are_sorted():
         )
     )
 
-    assert result == sorted(
-        result
-    )
+    assert result == sorted(result)
 
     assert len(result) == 3
 
@@ -144,15 +140,3 @@ def test_expiry_is_not_before_trade_date():
     )
 
     assert expiry >= trading_date
-
-
-def test_invalid_result_is_not_expected():
-
-    with pytest.raises(
-        ValueError
-    ):
-        # This deliberately checks that the
-        # public function has normal validation
-        # behavior if its internal expiry lookup
-        # ever returns no result.
-        pass
