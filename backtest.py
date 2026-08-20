@@ -7,9 +7,9 @@ from backtest_config import (
     BacktestConfig,
     DEFAULT_CONFIG,
 )
+from historical_dataset import next_trading_date
 from option_selector import round_to_strike
 from option_strategy import generate_signal
-
 
 @dataclass
 class BacktestTrade:
