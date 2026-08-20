@@ -6,9 +6,10 @@ class BacktestConfig:
     entry_hour: int = 15
     entry_minute: int = 0
 
-    # Exit during the next trading day's morning.
+    # BTST exit: next trading day's first available
+    # observation at or after 09:15.
     exit_hour: int = 9
-    exit_minute: int = 30
+    exit_minute: int = 15
 
     strike_interval: int = 50
 
