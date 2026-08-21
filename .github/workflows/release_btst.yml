@@ -1,0 +1,68 @@
+name: Release BTST Probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-btst:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Run test suite
+        run: python -m pytest -q
+
+      - name: Run real GitHub Release BTST probe
+        run: |
+          python - <<'PY'
+          from datetime import date
+          from pathlib import Path
+
+          from release_btst_pipeline import (
+              run_release_btst_pipeline,
+          )
+
+          result = run_release_btst_pipeline(
+              destination_dir=Path("release-data"),
+              monthly_zip_name="November 2017.zip",
+              option_type="PE",
+              strike=10050,
+              entry_date=date(2017, 10, 26),
+              exit_date=date(2017, 10, 27),
+              owner="myswingbtsttrading",
+              repo="nifty-options-btst",
+              tag="data-2017-v1",
+              asset_names=[
+                  "NiftyOptions 2017.zip",
+                  "NiftyOptions 2017091.zip",
+              ],
+          )
+
+          print("Release BTST probe")
+          print("==================")
+          print(f"Archive: {result.get('archive')}")
+          print(f"Monthly ZIP: {result.get('monthly_zip')}")
+          print(f"Option: {result['option_type']}")
+          print(f"Strike: {result['strike']}")
+          print(f"Entry: {result['entry']}")
+          print(f"Exit: {result['exit']}")
+          print(f"Downloaded: {result['downloaded_assets']}")
+          print("STATUS: PASS")
+          PY
