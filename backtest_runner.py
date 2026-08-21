@@ -13,12 +13,24 @@ from data_loader import _read_csv
 from zenodo_option_data import load_month_contract
 
 
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+
+UNDERLYING_DATA = DATA_DIR / "nifty.csv"
+OPTIONS_DATA = DATA_DIR / "nifty_options.csv"
+
+
 def _load_json(path: Path) -> Dict[str, Any]:
-    with path.open("r", encoding="utf-8") as handle:
+    with path.open(
+        "r",
+        encoding="utf-8",
+    ) as handle:
         return json.load(handle)
 
 
-def _load_underlying(path: Path) -> List[Dict[str, Any]]:
+def _load_underlying(
+    path: Path,
+) -> List[Dict[str, Any]]:
     return _read_csv(path)
 
 
@@ -36,6 +48,77 @@ def _load_options_from_zenodo(
     )
 
 
+def _select_entry_quote(
+    rows: List[Dict[str, Any]],
+) -> Dict[str, Any] | None:
+    """
+    Select the 15:00 observation when available.
+
+    If 15:00 is unavailable, use the latest observation
+    before 15:00.
+    """
+
+    exact = [
+        row
+        for row in rows
+        if (
+            row["timestamp"].hour == 15
+            and row["timestamp"].minute == 0
+        )
+    ]
+
+    if exact:
+        return min(
+            exact,
+            key=lambda row: row["timestamp"],
+        )
+
+    candidates = [
+        row
+        for row in rows
+        if (
+            row["timestamp"].hour,
+            row["timestamp"].minute,
+        )
+        <= (15, 0)
+    ]
+
+    if not candidates:
+        return None
+
+    return max(
+        candidates,
+        key=lambda row: row["timestamp"],
+    )
+
+
+def _select_exit_quote(
+    rows: List[Dict[str, Any]],
+) -> Dict[str, Any] | None:
+    """
+    Select the first available observation at or
+    after 09:15.
+    """
+
+    candidates = [
+        row
+        for row in rows
+        if (
+            row["timestamp"].hour,
+            row["timestamp"].minute,
+        )
+        >= (9, 15)
+    ]
+
+    if not candidates:
+        return None
+
+    return min(
+        candidates,
+        key=lambda row: row["timestamp"],
+    )
+
+
 def run_zenodo_btst_probe(
     archive_path: str | Path,
     monthly_zip_name: str,
@@ -45,8 +128,8 @@ def run_zenodo_btst_probe(
     exit_date: date,
 ) -> Dict[str, Any]:
     """
-    Validate one historical Zenodo contract through the
-    normalized option-data interface.
+    Validate one historical Zenodo contract through
+    the normalized option-data interface.
     """
 
     archive_path = Path(archive_path)
@@ -82,32 +165,12 @@ def run_zenodo_btst_probe(
             f"{exit_date}"
         )
 
-    entry = min(
-        (
-            row
-            for row in entry_rows
-            if (
-                row["timestamp"].hour,
-                row["timestamp"].minute,
-            )
-            <= (15, 0)
-        ),
-        key=lambda row: row["timestamp"],
-        default=None,
+    entry = _select_entry_quote(
+        entry_rows
     )
 
-    exit_ = min(
-        (
-            row
-            for row in exit_rows
-            if (
-                row["timestamp"].hour,
-                row["timestamp"].minute,
-            )
-            >= (9, 15)
-        ),
-        key=lambda row: row["timestamp"],
-        default=None,
+    exit_ = _select_exit_quote(
+        exit_rows
     )
 
     if entry is None:
@@ -141,13 +204,13 @@ def main() -> None:
     parser.add_argument(
         "--underlying",
         type=Path,
-        default=Path("data/nifty.csv"),
+        default=UNDERLYING_DATA,
     )
 
     parser.add_argument(
         "--options",
         type=Path,
-        default=Path("data/nifty_options.csv"),
+        default=OPTIONS_DATA,
     )
 
     parser.add_argument(
@@ -194,12 +257,17 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    if (
-        args.zenodo_year_zip is not None
-        and args.zenodo_month_zip is not None
-        and args.zenodo_strike is not None
-        and args.zenodo_entry_date is not None
-        and args.zenodo_exit_date is not None
+    zenodo_arguments = (
+        args.zenodo_year_zip,
+        args.zenodo_month_zip,
+        args.zenodo_strike,
+        args.zenodo_entry_date,
+        args.zenodo_exit_date,
+    )
+
+    if all(
+        value is not None
+        for value in zenodo_arguments
     ):
         result = run_zenodo_btst_probe(
             archive_path=args.zenodo_year_zip,
