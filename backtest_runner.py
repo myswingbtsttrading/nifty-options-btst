@@ -1,93 +1,263 @@
+from __future__ import annotations
+
+import argparse
+import json
+from dataclasses import asdict
+from datetime import date
 from pathlib import Path
+from typing import Any, Dict, List
 
-from backtest import (
-    format_backtest_report,
-    run_backtest,
-)
-from backtest_config import DEFAULT_CONFIG
-from historical_data import (
-    load_nifty_history,
-    load_nifty_option_history,
-    validate_historical_data,
-)
+from backtest import BacktestResult, run_backtest
+from backtest_config import BacktestConfig
+from data_loader import load_csv
+from zenodo_option_data import load_month_contract
 
 
-DATA_DIR = Path("data")
+def _load_json(path: Path) -> Dict[str, Any]:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
 
-NIFTY_FILE = DATA_DIR / "nifty.csv"
-OPTIONS_FILE = DATA_DIR / "nifty_options.csv"
+
+def _load_underlying(path: Path) -> List[Dict[str, Any]]:
+    return load_csv(path)
+
+
+def _load_options_from_zenodo(
+    archive_path: Path,
+    monthly_zip_name: str,
+    option_type: str,
+    strike: float,
+) -> List[Dict[str, Any]]:
+    return load_month_contract(
+        year_zip_path=archive_path,
+        monthly_zip_name=monthly_zip_name,
+        option_type=option_type,
+        strike=strike,
+    )
+
+
+def run_zenodo_btst_probe(
+    archive_path: str | Path,
+    monthly_zip_name: str,
+    option_type: str,
+    strike: float,
+    entry_date: date,
+    exit_date: date,
+) -> Dict[str, Any]:
+    """
+    Validate one real historical Zenodo contract through the
+    same normalized option-data interface used by the backtest.
+    """
+
+    archive_path = Path(archive_path)
+
+    rows = _load_options_from_zenodo(
+        archive_path=archive_path,
+        monthly_zip_name=monthly_zip_name,
+        option_type=option_type,
+        strike=strike,
+    )
+
+    entry_rows = [
+        row
+        for row in rows
+        if row["timestamp"].date() == entry_date
+    ]
+
+    exit_rows = [
+        row
+        for row in rows
+        if row["timestamp"].date() == exit_date
+    ]
+
+    if not entry_rows:
+        raise ValueError(
+            f"No option data found for entry date "
+            f"{entry_date}"
+        )
+
+    if not exit_rows:
+        raise ValueError(
+            f"No option data found for exit date "
+            f"{exit_date}"
+        )
+
+    entry = min(
+        (
+            row
+            for row in entry_rows
+            if (
+                row["timestamp"].hour,
+                row["timestamp"].minute,
+            )
+            <= (15, 0)
+        ),
+        key=lambda row: row["timestamp"],
+        default=None,
+    )
+
+    exit_ = min(
+        (
+            row
+            for row in exit_rows
+            if (
+                row["timestamp"].hour,
+                row["timestamp"].minute,
+            )
+            >= (9, 15)
+        ),
+        key=lambda row: row["timestamp"],
+        default=None,
+    )
+
+    if entry is None:
+        raise ValueError(
+            f"No entry observation at or before 15:00 "
+            f"on {entry_date}"
+        )
+
+    if exit_ is None:
+        raise ValueError(
+            f"No exit observation at or after 09:15 "
+            f"on {exit_date}"
+        )
+
+    return {
+        "archive": archive_path.name,
+        "monthly_zip": monthly_zip_name,
+        "option_type": option_type.upper(),
+        "strike": float(strike),
+        "expiry": rows[0]["expiry"],
+        "entry": entry,
+        "exit": exit_,
+    }
 
 
 def main() -> None:
-    print("NIFTY OPTIONS BTST BACKTEST")
-    print("=" * 40)
+    parser = argparse.ArgumentParser(
+        description="NIFTY Options BTST backtest runner"
+    )
 
-    if not NIFTY_FILE.exists():
-        raise FileNotFoundError(
-            f"Missing historical NIFTY data: {NIFTY_FILE}"
+    parser.add_argument(
+        "--underlying",
+        type=Path,
+        default=Path("data/nifty.csv"),
+    )
+
+    parser.add_argument(
+        "--options",
+        type=Path,
+        default=Path("data/nifty_options.csv"),
+    )
+
+    parser.add_argument(
+        "--zenodo-year-zip",
+        type=Path,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--zenodo-month-zip",
+        type=str,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--zenodo-option-type",
+        type=str,
+        default="PE",
+    )
+
+    parser.add_argument(
+        "--zenodo-strike",
+        type=float,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--zenodo-entry-date",
+        type=str,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--zenodo-exit-date",
+        type=str,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("backtest_result.json"),
+    )
+
+    args = parser.parse_args()
+
+    if (
+        args.zenodo_year_zip is not None
+        and args.zenodo_month_zip is not None
+        and args.zenodo_strike is not None
+        and args.zenodo_entry_date is not None
+        and args.zenodo_exit_date is not None
+    ):
+        result = run_zenodo_btst_probe(
+            archive_path=args.zenodo_year_zip,
+            monthly_zip_name=args.zenodo_month_zip,
+            option_type=args.zenodo_option_type,
+            strike=args.zenodo_strike,
+            entry_date=date.fromisoformat(
+                args.zenodo_entry_date
+            ),
+            exit_date=date.fromisoformat(
+                args.zenodo_exit_date
+            ),
         )
 
-    if not OPTIONS_FILE.exists():
-        raise FileNotFoundError(
-            f"Missing historical options data: {OPTIONS_FILE}"
+        print(
+            json.dumps(
+                result,
+                default=str,
+                indent=2,
+            )
         )
 
-    nifty = load_nifty_history(
-        NIFTY_FILE
+        return
+
+    underlying_rows = _load_underlying(
+        args.underlying
     )
 
-    options = load_nifty_option_history(
-        OPTIONS_FILE
+    option_rows = load_csv(
+        args.options
     )
 
-    validation = validate_historical_data(
-        nifty,
-        options,
+    result: BacktestResult = run_backtest(
+        underlying_rows=underlying_rows,
+        option_rows=option_rows,
+        config=BacktestConfig(),
     )
 
-    print(
-        f"NIFTY rows: "
-        f"{validation['underlying_rows']}"
-    )
+    payload = asdict(result)
 
-    print(
-        f"Option rows: "
-        f"{validation['option_rows']}"
-    )
-
-    print(
-        f"NIFTY dates: "
-        f"{validation['underlying_dates']}"
-    )
-
-    print(
-        f"Option dates: "
-        f"{validation['option_dates']}"
-    )
-
-    print(
-        f"Overlapping dates: "
-        f"{validation['overlapping_dates']}"
-    )
-
-    print(
-        f"Option types: "
-        f"{', '.join(validation['option_types'])}"
-    )
-
-    if validation["overlapping_dates"] == 0:
-        raise ValueError(
-            "NIFTY and option data have no overlapping dates."
+    with args.output.open(
+        "w",
+        encoding="utf-8",
+    ) as handle:
+        json.dump(
+            payload,
+            handle,
+            default=str,
+            indent=2,
         )
 
-    result = run_backtest(
-        underlying_rows=nifty,
-        option_rows=options,
-        config=DEFAULT_CONFIG,
+    print(
+        json.dumps(
+            payload,
+            default=str,
+            indent=2,
+        )
     )
-
-    print()
-    print(format_backtest_report(result))
 
 
 if __name__ == "__main__":
