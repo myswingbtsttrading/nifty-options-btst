@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 
 from backtest import BacktestResult, run_backtest
 from backtest_config import BacktestConfig
-from data_loader import load_csv
+from data_loader import _read_csv
 from zenodo_option_data import load_month_contract
 
 
@@ -19,7 +19,7 @@ def _load_json(path: Path) -> Dict[str, Any]:
 
 
 def _load_underlying(path: Path) -> List[Dict[str, Any]]:
-    return load_csv(path)
+    return _read_csv(path)
 
 
 def _load_options_from_zenodo(
@@ -45,8 +45,8 @@ def run_zenodo_btst_probe(
     exit_date: date,
 ) -> Dict[str, Any]:
     """
-    Validate one real historical Zenodo contract through the
-    same normalized option-data interface used by the backtest.
+    Validate one historical Zenodo contract through the
+    normalized option-data interface.
     """
 
     archive_path = Path(archive_path)
@@ -228,7 +228,7 @@ def main() -> None:
         args.underlying
     )
 
-    option_rows = load_csv(
+    option_rows = _read_csv(
         args.options
     )
 
