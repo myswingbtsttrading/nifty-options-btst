@@ -29,48 +29,32 @@ jobs:
       - name: Run test suite
         run: python -m pytest -q
 
-      - name: Download release assets
+      - name: Download 2017 release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python - <<'PY'
-          from pathlib import Path
+          mkdir -p release-data
 
-          from github_release_assets import (
-              download_release_assets,
-          )
+          gh release download data-2017-v1 \
+            --repo myswingbtsttrading/nifty-options-btst \
+            --pattern "NiftyOptions 2017.zip" \
+            --dir release-data
 
-          paths = download_release_assets(
-              owner="myswingbtsttrading",
-              repo="nifty-options-btst",
-              tag="data-2017-v1",
-              asset_names=[
-                  "NiftyOptions 2017.zip",
-                  "NiftyOptions 2017091.zip",
-              ],
-              destination_dir=Path(
-                  "release-data"
-              ),
-          )
+          gh release download data-2017-v1 \
+            --repo myswingbtsttrading/nifty-options-btst \
+            --pattern "NiftyOptions 2017091.zip" \
+            --dir release-data
 
-          print("Downloaded release assets:")
+          echo "Downloaded release assets:"
+          ls -lh release-data
 
-          for path in paths:
-              print(
-                  f"- {path.name}: "
-                  f"{path.stat().st_size} bytes"
-              )
-          PY
-
-      - name: Validate downloaded ZIP files
+      - name: Validate release ZIP files
         run: |
           python - <<'PY'
           from pathlib import Path
           from zipfile import ZipFile
 
-          release_dir = Path(
-              "release-data"
-          )
+          release_dir = Path("release-data")
 
           expected = [
               "NiftyOptions 2017.zip",
@@ -82,36 +66,31 @@ jobs:
 
               if not path.exists():
                   raise SystemExit(
-                      f"Missing release asset: {name}"
+                      f"ERROR: Missing release asset: {name}"
                   )
 
               size = path.stat().st_size
 
-              print(
-                  f"{name}: {size} bytes"
-              )
+              print(f"{name}: {size:,} bytes")
 
               if size == 0:
                   raise SystemExit(
-                      f"Empty ZIP: {name}"
+                      f"ERROR: Empty ZIP: {name}"
                   )
 
               with ZipFile(path) as archive:
-                  bad = archive.testzip()
+                  bad_file = archive.testzip()
 
-                  if bad is not None:
+                  if bad_file is not None:
                       raise SystemExit(
-                          f"Corrupt ZIP {name}: {bad}"
+                          f"ERROR: Corrupt ZIP {name}: {bad_file}"
                       )
 
                   print(
-                      f"  ZIP OK: "
-                      f"{len(archive.namelist())} entries"
+                      f"  ZIP OK: {len(archive.namelist())} entries"
                   )
 
-          print(
-              "STATUS: RELEASE ASSETS PASS"
-          )
+          print("STATUS: RELEASE ASSETS PASS")
           PY
 
       - name: Run Release BTST probe
@@ -125,58 +104,22 @@ jobs:
           )
 
           result = run_release_btst_probe(
-              release_dir=Path(
-                  "release-data"
-              ),
+              release_dir=Path("release-data"),
               year=2017,
-              monthly_zip_name=(
-                  "November 2017.zip"
-              ),
+              monthly_zip_name="November 2017.zip",
               option_type="PE",
               strike=10050,
-              entry_date=date(
-                  2017,
-                  10,
-                  26,
-              ),
-              exit_date=date(
-                  2017,
-                  10,
-                  27,
-              ),
+              entry_date=date(2017, 10, 26),
+              exit_date=date(2017, 10, 27),
           )
 
-          print(
-              "Release BTST probe"
-          )
-          print(
-              "=================="
-          )
-          print(
-              f"Archive: "
-              f"{result.get('archive')}"
-          )
-          print(
-              f"Monthly ZIP: "
-              f"{result.get('monthly_zip')}"
-          )
-          print(
-              f"Option: "
-              f"{result['option_type']}"
-          )
-          print(
-              f"Strike: "
-              f"{result['strike']}"
-          )
-          print(
-              f"Entry: "
-              f"{result['entry']}"
-          )
-          print(
-              f"Exit: "
-              f"{result['exit']}"
-          )
-          print(
-              "STATUS: PASS"
-          )
+          print("Release BTST probe")
+          print("==================")
+          print(f"Archive: {result.get('archive')}")
+          print(f"Monthly ZIP: {result.get('monthly_zip')}")
+          print(f"Option: {result['option_type']}")
+          print(f"Strike: {result['strike']}")
+          print(f"Entry: {result['entry']}")
+          print(f"Exit: {result['exit']}")
+          print("STATUS: PASS")
           PY
