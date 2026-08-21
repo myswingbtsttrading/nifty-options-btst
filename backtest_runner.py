@@ -14,10 +14,14 @@ from zenodo_option_data import load_month_contract
 
 
 BASE_DIR = Path(__file__).resolve().parent
+
 DATA_DIR = BASE_DIR / "data"
 
-UNDERLYING_DATA = DATA_DIR / "nifty.csv"
-OPTIONS_DATA = DATA_DIR / "nifty_options.csv"
+NIFTY_FILE = DATA_DIR / "nifty.csv"
+OPTIONS_FILE = DATA_DIR / "nifty_options.csv"
+
+UNDERLYING_DATA = NIFTY_FILE
+OPTIONS_DATA = OPTIONS_FILE
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -51,13 +55,6 @@ def _load_options_from_zenodo(
 def _select_entry_quote(
     rows: List[Dict[str, Any]],
 ) -> Dict[str, Any] | None:
-    """
-    Select the 15:00 observation when available.
-
-    If 15:00 is unavailable, use the latest observation
-    before 15:00.
-    """
-
     exact = [
         row
         for row in rows
@@ -95,11 +92,6 @@ def _select_entry_quote(
 def _select_exit_quote(
     rows: List[Dict[str, Any]],
 ) -> Dict[str, Any] | None:
-    """
-    Select the first available observation at or
-    after 09:15.
-    """
-
     candidates = [
         row
         for row in rows
@@ -127,10 +119,6 @@ def run_zenodo_btst_probe(
     entry_date: date,
     exit_date: date,
 ) -> Dict[str, Any]:
-    """
-    Validate one historical Zenodo contract through
-    the normalized option-data interface.
-    """
 
     archive_path = Path(archive_path)
 
@@ -204,13 +192,13 @@ def main() -> None:
     parser.add_argument(
         "--underlying",
         type=Path,
-        default=UNDERLYING_DATA,
+        default=NIFTY_FILE,
     )
 
     parser.add_argument(
         "--options",
         type=Path,
-        default=OPTIONS_DATA,
+        default=OPTIONS_FILE,
     )
 
     parser.add_argument(
