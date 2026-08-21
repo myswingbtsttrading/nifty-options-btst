@@ -29,63 +29,6 @@ jobs:
       - name: Run test suite
         run: python -m pytest -q
 
-      - name: Inspect release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python - <<'PY'
-          from github_release_assets import (
-              get_release,
-              list_release_assets,
-          )
-
-          owner = "myswingbtsttrading"
-          repo = "nifty-options-btst"
-          tag = "data-2017-v1"
-
-          release = get_release(
-              owner,
-              repo,
-              tag,
-          )
-
-          print("Release:")
-          print(
-              f"- tag: {release.get('tag_name')}"
-          )
-          print(
-              f"- name: {release.get('name')}"
-          )
-          print(
-              f"- id: {release.get('id')}"
-          )
-
-          assets = list_release_assets(
-              owner,
-              repo,
-              tag,
-          )
-
-          print()
-          print(
-              f"Dedicated asset API count: "
-              f"{len(assets)}"
-          )
-
-          for asset in assets:
-              print(
-                  f"- {asset.get('name')} "
-                  f"({asset.get('size')} bytes) "
-                  f"id={asset.get('id')}"
-              )
-
-          if not assets:
-              raise SystemExit(
-                  "ERROR: Dedicated GitHub release-assets "
-                  "API returned zero assets."
-              )
-          PY
-
       - name: Download release assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -119,7 +62,59 @@ jobs:
               )
           PY
 
-      - name: Run real Release BTST probe
+      - name: Validate downloaded ZIP files
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          release_dir = Path(
+              "release-data"
+          )
+
+          expected = [
+              "NiftyOptions 2017.zip",
+              "NiftyOptions 2017091.zip",
+          ]
+
+          for name in expected:
+              path = release_dir / name
+
+              if not path.exists():
+                  raise SystemExit(
+                      f"Missing release asset: {name}"
+                  )
+
+              size = path.stat().st_size
+
+              print(
+                  f"{name}: {size} bytes"
+              )
+
+              if size == 0:
+                  raise SystemExit(
+                      f"Empty ZIP: {name}"
+                  )
+
+              with ZipFile(path) as archive:
+                  bad = archive.testzip()
+
+                  if bad is not None:
+                      raise SystemExit(
+                          f"Corrupt ZIP {name}: {bad}"
+                      )
+
+                  print(
+                      f"  ZIP OK: "
+                      f"{len(archive.namelist())} entries"
+                  )
+
+          print(
+              "STATUS: RELEASE ASSETS PASS"
+          )
+          PY
+
+      - name: Run Release BTST probe
         run: |
           python - <<'PY'
           from datetime import date
@@ -151,8 +146,12 @@ jobs:
               ),
           )
 
-          print("Release BTST probe")
-          print("==================")
+          print(
+              "Release BTST probe"
+          )
+          print(
+              "=================="
+          )
           print(
               f"Archive: "
               f"{result.get('archive')}"
@@ -177,5 +176,7 @@ jobs:
               f"Exit: "
               f"{result['exit']}"
           )
-          print("STATUS: PASS")
+          print(
+              "STATUS: PASS"
+          )
           PY
