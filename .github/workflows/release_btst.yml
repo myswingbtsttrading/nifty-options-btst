@@ -29,7 +29,64 @@ jobs:
       - name: Run test suite
         run: python -m pytest -q
 
-      - name: Download Release assets
+      - name: Inspect release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          from github_release_assets import (
+              get_release,
+              list_release_assets,
+          )
+
+          owner = "myswingbtsttrading"
+          repo = "nifty-options-btst"
+          tag = "data-2017-v1"
+
+          release = get_release(
+              owner,
+              repo,
+              tag,
+          )
+
+          print("Release:")
+          print(
+              f"- tag: {release.get('tag_name')}"
+          )
+          print(
+              f"- name: {release.get('name')}"
+          )
+          print(
+              f"- id: {release.get('id')}"
+          )
+
+          assets = list_release_assets(
+              owner,
+              repo,
+              tag,
+          )
+
+          print()
+          print(
+              f"Dedicated asset API count: "
+              f"{len(assets)}"
+          )
+
+          for asset in assets:
+              print(
+                  f"- {asset.get('name')} "
+                  f"({asset.get('size')} bytes) "
+                  f"id={asset.get('id')}"
+              )
+
+          if not assets:
+              raise SystemExit(
+                  "ERROR: Dedicated GitHub release-assets "
+                  "API returned zero assets."
+              )
+          PY
+
+      - name: Download release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -48,7 +105,9 @@ jobs:
                   "NiftyOptions 2017.zip",
                   "NiftyOptions 2017091.zip",
               ],
-              destination_dir=Path("release-data"),
+              destination_dir=Path(
+                  "release-data"
+              ),
           )
 
           print("Downloaded release assets:")
@@ -71,18 +130,33 @@ jobs:
           )
 
           result = run_release_btst_probe(
-              release_dir=Path("release-data"),
+              release_dir=Path(
+                  "release-data"
+              ),
               year=2017,
-              monthly_zip_name="November 2017.zip",
+              monthly_zip_name=(
+                  "November 2017.zip"
+              ),
               option_type="PE",
               strike=10050,
-              entry_date=date(2017, 10, 26),
-              exit_date=date(2017, 10, 27),
+              entry_date=date(
+                  2017,
+                  10,
+                  26,
+              ),
+              exit_date=date(
+                  2017,
+                  10,
+                  27,
+              ),
           )
 
           print("Release BTST probe")
           print("==================")
-          print(f"Archive: {result.get('archive')}")
+          print(
+              f"Archive: "
+              f"{result.get('archive')}"
+          )
           print(
               f"Monthly ZIP: "
               f"{result.get('monthly_zip')}"
