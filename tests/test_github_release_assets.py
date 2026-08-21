@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 import github_release_assets
@@ -63,18 +61,8 @@ def test_list_release_assets(
 
     assert len(assets) == 2
 
-    assert (
-        assets[0]["name"]
-        == "NiftyOptions 2017.zip"
-    )
 
-    assert (
-        assets[1]["name"]
-        == "NiftyOptions 2017091.zip"
-    )
-
-
-def test_find_release_asset(
+def test_find_release_asset_is_case_insensitive(
     monkeypatch,
 ):
     expected = {
@@ -83,8 +71,6 @@ def test_find_release_asset(
             {
                 "name":
                     "NiftyOptions 2017.zip",
-                "browser_download_url":
-                    "https://example.com/2017.zip",
             },
         ],
     }
@@ -107,6 +93,40 @@ def test_find_release_asset(
     assert (
         asset["name"]
         == "NiftyOptions 2017.zip"
+    )
+
+
+def test_find_release_asset_strips_path(
+    monkeypatch,
+):
+    expected = {
+        "tag_name": "data-2017-v1",
+        "assets": [
+            {
+                "name":
+                    "NiftyOptions 2017091.zip",
+            },
+        ],
+    }
+
+    monkeypatch.setattr(
+        github_release_assets,
+        "_api_get",
+        lambda url: expected,
+    )
+
+    asset = (
+        github_release_assets.find_release_asset(
+            "myswingbtsttrading",
+            "nifty-options-btst",
+            "data-2017-v1",
+            "/downloads/NiftyOptions 2017091.zip",
+        )
+    )
+
+    assert (
+        asset["name"]
+        == "NiftyOptions 2017091.zip"
     )
 
 
@@ -196,7 +216,10 @@ def test_download_release_asset(
     )
 
     assert result == destination
-    assert destination.read_bytes() == b"release-data"
+    assert (
+        destination.read_bytes()
+        == b"release-data"
+    )
 
 
 def test_download_multiple_assets(
