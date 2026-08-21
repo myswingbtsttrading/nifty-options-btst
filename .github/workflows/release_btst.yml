@@ -29,12 +29,13 @@ jobs:
       - name: Run test suite
         run: python -m pytest -q
 
-      - name: Inspect GitHub Release assets
+      - name: Inspect GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
           import json
+          import os
           import urllib.request
 
           owner = "myswingbtsttrading"
@@ -51,8 +52,7 @@ jobs:
               headers={
                   "Accept": "application/vnd.github+json",
                   "Authorization": (
-                      "Bearer "
-                      + __import__("os").environ["GH_TOKEN"]
+                      f"Bearer {os.environ['GH_TOKEN']}"
                   ),
                   "User-Agent": "nifty-options-btst",
               },
@@ -63,42 +63,148 @@ jobs:
                   response.read().decode("utf-8")
               )
 
-          print("Release:", release["tag_name"])
-          print("Assets:")
+          print("Release tag:", release["tag_name"])
+          print("Release name:", release.get("name"))
+          print("Release URL:", release.get("html_url"))
 
-          for asset in release.get("assets", []):
+          assets = release.get("assets", [])
+
+          print()
+          print("Release asset count:", len(assets))
+
+          if not assets:
+              raise SystemExit(
+                  "ERROR: GitHub API reports zero release assets. "
+                  "The ZIP files are not attached to this release."
+              )
+
+          print()
+          print("Release assets:")
+
+          for asset in assets:
               print(
                   f"- {asset['name']} "
                   f"({asset['size']} bytes)"
               )
           PY
 
-      - name: Run real GitHub Release BTST probe
+      - name: Download release assets
         env:
           GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          owner = "myswingbtsttrading"
+          repo = "nifty-options-btst"
+          tag = "data-2017-v1"
+
+          api_url = (
+              f"https://api.github.com/repos/"
+              f"{owner}/{repo}/releases/tags/{tag}"
+          )
+
+          request = Request(
+              api_url,
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": (
+                      f"Bearer {os.environ['GH_TOKEN']}"
+                  ),
+                  "User-Agent": "nifty-options-btst",
+              },
+          )
+
+          with urlopen(request) as response:
+              release = __import__("json").loads(
+                  response.read().decode("utf-8")
+              )
+
+          destination = Path("release-data")
+          destination.mkdir(
+              parents=True,
+              exist_ok=True,
+          )
+
+          wanted = {
+              "NiftyOptions 2017.zip",
+              "NiftyOptions 2017091.zip",
+          }
+
+          found = set()
+
+          for asset in release.get("assets", []):
+              name = asset["name"]
+
+              if name not in wanted:
+                  continue
+
+              download_url = asset[
+                  "browser_download_url"
+              ]
+
+              output = destination / name
+
+              download_request = Request(
+                  download_url,
+                  headers={
+                      "Accept":
+                          "application/octet-stream",
+                      "Authorization":
+                          (
+                              f"Bearer "
+                              f"{os.environ['GH_TOKEN']}"
+                          ),
+                      "User-Agent":
+                          "nifty-options-btst",
+                  },
+              )
+
+              with urlopen(
+                  download_request
+              ) as response:
+                  output.write_bytes(
+                      response.read()
+                  )
+
+              found.add(name)
+
+              print(
+                  f"Downloaded {name}: "
+                  f"{output.stat().st_size} bytes"
+              )
+
+          missing = wanted - found
+
+          if missing:
+              raise SystemExit(
+                  "Missing release assets: "
+                  + ", ".join(
+                      sorted(missing)
+                  )
+              )
+          PY
+
+      - name: Run real BTST probe
         run: |
           python - <<'PY'
           from datetime import date
           from pathlib import Path
 
-          from release_btst_pipeline import (
-              run_release_btst_pipeline,
+          from backtest_runner import (
+              run_release_btst_probe,
           )
 
-          result = run_release_btst_pipeline(
-              destination_dir=Path("release-data"),
+          result = run_release_btst_probe(
+              release_dir=Path("release-data"),
+              year=2017,
               monthly_zip_name="November 2017.zip",
               option_type="PE",
               strike=10050,
               entry_date=date(2017, 10, 26),
               exit_date=date(2017, 10, 27),
-              owner="myswingbtsttrading",
-              repo="nifty-options-btst",
-              tag="data-2017-v1",
-              asset_names=[
-                  "NiftyOptions 2017.zip",
-                  "NiftyOptions 2017091.zip",
-              ],
           )
 
           print("Release BTST probe")
@@ -123,10 +229,6 @@ jobs:
           print(
               f"Exit: "
               f"{result['exit']}"
-          )
-          print(
-              f"Downloaded: "
-              f"{result['downloaded_assets']}"
           )
           print("STATUS: PASS")
           PY
