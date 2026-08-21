@@ -15,11 +15,13 @@ NIFTY_FILE = DATA_DIR / "nifty.csv"
 OPTIONS_FILE = DATA_DIR / "nifty_options.csv"
 
 
-def _add_archive_metadata(
+def _add_probe_metadata(
     result: Dict[str, Any],
     archive_name: str,
+    monthly_zip_name: str,
 ) -> Dict[str, Any]:
     result["archive"] = archive_name
+    result["monthly_zip"] = monthly_zip_name
     return result
 
 
@@ -61,13 +63,16 @@ def run_zenodo_btst_probe(
             key=lambda item: item.name.lower(),
         )
 
-        if assets:
-            result["archive"] = ",".join(
-                asset.name
-                for asset in assets
-            )
+        archive_name = ",".join(
+            asset.name
+            for asset in assets
+        )
 
-        return result
+        return _add_probe_metadata(
+            result,
+            archive_name,
+            monthly_zip_name,
+        )
 
     result = load_btst_contract(
         year_zip_path=path,
@@ -78,9 +83,10 @@ def run_zenodo_btst_probe(
         exit_date=exit_date,
     )
 
-    return _add_archive_metadata(
+    return _add_probe_metadata(
         result,
         path.name,
+        monthly_zip_name,
     )
 
 
@@ -114,10 +120,13 @@ def run_release_btst_probe(
         key=lambda item: item.name.lower(),
     )
 
-    if assets:
-        result["archive"] = ",".join(
-            asset.name
-            for asset in assets
-        )
+    archive_name = ",".join(
+        asset.name
+        for asset in assets
+    )
 
-    return result
+    return _add_probe_metadata(
+        result,
+        archive_name,
+        monthly_zip_name,
+    )
