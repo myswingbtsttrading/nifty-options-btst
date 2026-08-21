@@ -28,7 +28,36 @@ def _parse_year(name: str) -> int | None:
 
 
 def _parse_part(name: str) -> int | None:
-    text = _normalise(name)
+    """
+    Supports the actual split naming convention:
+
+        NiftyOptions 2017.zip
+        NiftyOptions 2017091.zip
+
+    The latter is interpreted as year 2017, split part 1.
+    """
+
+    text = Path(name).stem.lower()
+
+    prefix = "niftyoptions "
+
+    if not text.startswith(prefix):
+        return None
+
+    suffix = text[len(prefix):]
+
+    if len(suffix) == 4 and suffix.isdigit():
+        return None
+
+    if (
+        len(suffix) == 5
+        and suffix.isdigit()
+    ):
+        year = suffix[:4]
+        part = suffix[4]
+
+        if year.isdigit() and part.isdigit():
+            return int(part)
 
     markers = (
         "part",
@@ -169,7 +198,7 @@ def resolve_year_archives(
 
     if not assets:
         raise FileNotFoundError(
-            f"No release ZIP assets found for "
+            f"No ZIP release assets found for "
             f"{year}"
         )
 
