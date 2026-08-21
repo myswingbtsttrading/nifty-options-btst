@@ -29,7 +29,53 @@ jobs:
       - name: Run test suite
         run: python -m pytest -q
 
+      - name: Inspect GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.request
+
+          owner = "myswingbtsttrading"
+          repo = "nifty-options-btst"
+          tag = "data-2017-v1"
+
+          url = (
+              f"https://api.github.com/repos/"
+              f"{owner}/{repo}/releases/tags/{tag}"
+          )
+
+          request = urllib.request.Request(
+              url,
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": (
+                      "Bearer "
+                      + __import__("os").environ["GH_TOKEN"]
+                  ),
+                  "User-Agent": "nifty-options-btst",
+              },
+          )
+
+          with urllib.request.urlopen(request) as response:
+              release = json.loads(
+                  response.read().decode("utf-8")
+              )
+
+          print("Release:", release["tag_name"])
+          print("Assets:")
+
+          for asset in release.get("assets", []):
+              print(
+                  f"- {asset['name']} "
+                  f"({asset['size']} bytes)"
+              )
+          PY
+
       - name: Run real GitHub Release BTST probe
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
           from datetime import date
@@ -58,11 +104,29 @@ jobs:
           print("Release BTST probe")
           print("==================")
           print(f"Archive: {result.get('archive')}")
-          print(f"Monthly ZIP: {result.get('monthly_zip')}")
-          print(f"Option: {result['option_type']}")
-          print(f"Strike: {result['strike']}")
-          print(f"Entry: {result['entry']}")
-          print(f"Exit: {result['exit']}")
-          print(f"Downloaded: {result['downloaded_assets']}")
+          print(
+              f"Monthly ZIP: "
+              f"{result.get('monthly_zip')}"
+          )
+          print(
+              f"Option: "
+              f"{result['option_type']}"
+          )
+          print(
+              f"Strike: "
+              f"{result['strike']}"
+          )
+          print(
+              f"Entry: "
+              f"{result['entry']}"
+          )
+          print(
+              f"Exit: "
+              f"{result['exit']}"
+          )
+          print(
+              f"Downloaded: "
+              f"{result['downloaded_assets']}"
+          )
           print("STATUS: PASS")
           PY
