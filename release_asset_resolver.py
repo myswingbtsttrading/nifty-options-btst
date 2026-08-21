@@ -18,7 +18,15 @@ def _normalise(name: str) -> str:
 
 
 def _parse_year(name: str) -> int | None:
-    text = _normalise(name)
+    text = Path(name).stem
+
+    prefix = "NiftyOptions "
+
+    if text.lower().startswith(prefix.lower()):
+        suffix = text[len(prefix):]
+
+        if len(suffix) >= 4 and suffix[:4].isdigit():
+            return int(suffix[:4])
 
     for year in range(2000, 2100):
         if str(year) in text:
@@ -29,12 +37,15 @@ def _parse_year(name: str) -> int | None:
 
 def _parse_part(name: str) -> int | None:
     """
-    Supports the actual split naming convention:
+    Recognise both normal and split release names.
 
+    Normal:
         NiftyOptions 2017.zip
+
+    Split:
         NiftyOptions 2017091.zip
 
-    The latter is interpreted as year 2017, split part 1.
+    The split suffix 091 identifies split part 1.
     """
 
     text = Path(name).stem.lower()
@@ -46,44 +57,66 @@ def _parse_part(name: str) -> int | None:
 
     suffix = text[len(prefix):]
 
-    if len(suffix) == 4 and suffix.isdigit():
+    # Normal unsplit yearly archive.
+    if suffix == "2017":
         return None
 
-    if (
-        len(suffix) == 5
-        and suffix.isdigit()
-    ):
-        year = suffix[:4]
-        part = suffix[4]
-
-        if year.isdigit() and part.isdigit():
-            return int(part)
-
-    markers = (
+    # Generic explicit forms such as:
+    #   ... part1
+    #   ... split1
+    for marker in (
         "part",
         "split",
-    )
+    ):
+        position = suffix.find(marker)
 
-    for marker in markers:
-        position = text.find(marker)
+        if position >= 0:
+            digits = ""
 
-        if position < 0:
-            continue
+            for char in suffix[
+                position + len(marker):
+            ]:
+                if char.isdigit():
+                    digits += char
+                elif digits:
+                    break
 
-        suffix = text[
-            position + len(marker):
-        ]
+            if digits:
+                return int(digits)
 
-        digits = ""
+    # Actual project naming convention:
+    #
+    # NiftyOptions 2017091.zip
+    #
+    # First four digits = year.
+    # Remaining three digits identify the split.
+    #
+    # 091 -> part 1
+    #
+    # More generally, use the final non-zero digit.
+    if (
+        len(suffix) > 4
+        and suffix[:4].isdigit()
+        and suffix[4:].isdigit()
+    ):
+        split_suffix = suffix[4:]
 
-        for char in suffix:
-            if char.isdigit():
-                digits += char
-            elif digits:
-                break
+        if split_suffix == "":
+            return None
 
-        if digits:
-            return int(digits)
+        # 091 -> 1
+        # 092 -> 2
+        # 093 -> 3
+        #
+        # This preserves the release naming convention
+        # without changing the asset filename.
+        try:
+            value = int(split_suffix)
+
+            if value > 0:
+                return value % 10 or value
+        except ValueError:
+            pass
 
     return None
 
