@@ -49,7 +49,8 @@ def get_release(
 ) -> dict:
     url = (
         f"{GITHUB_API}/repos/"
-        f"{owner}/{repo}/releases/tags/{quote(tag, safe='')}"
+        f"{owner}/{repo}/releases/tags/"
+        f"{quote(tag, safe='')}"
     )
 
     result = _api_get(url)
@@ -73,19 +74,29 @@ def list_release_assets(
         tag,
     )
 
+    # Normal GitHub release response.
+    #
+    # Keep this path because it is also useful for tests
+    # and for environments where the release response
+    # already contains the assets.
+    release_assets = release.get("assets")
+
+    if isinstance(release_assets, list) and release_assets:
+        return [
+            asset
+            for asset in release_assets
+            if isinstance(asset, dict)
+        ]
+
+    # If the release response contains no assets, use the
+    # dedicated release-assets endpoint.
     release_id = release.get("id")
 
     if not release_id:
-        raise ValueError(
-            "GitHub release response has no release id"
-        )
+        # Preserve an empty result so find_release_asset()
+        # can produce the useful FileNotFoundError.
+        return []
 
-    # Do NOT rely on release["assets"].
-    #
-    # The release page shows the assets, while the
-    # /releases/tags/{tag} response seen by the runner
-    # reported an empty asset list. Fetch the dedicated
-    # release-assets endpoint instead.
     url = (
         f"{GITHUB_API}/repos/"
         f"{owner}/{repo}/releases/"
@@ -210,26 +221,45 @@ def download_release_asset(
 
     asset_id = asset.get("id")
 
-    if not asset_id:
-        raise ValueError(
-            "Release asset has no asset id: "
-            f"{asset_name}"
+    if asset_id:
+        # Preferred method: GitHub API asset endpoint.
+        url = (
+            f"{GITHUB_API}/repos/"
+            f"{owner}/{repo}/releases/assets/"
+            f"{asset_id}"
         )
 
-    # Download through the GitHub API asset endpoint.
-    #
-    # This avoids the 404 encountered with the public
-    # /releases/download/... fallback URL.
-    api_url = (
-        f"{GITHUB_API}/repos/"
-        f"{owner}/{repo}/releases/assets/"
-        f"{asset_id}"
-    )
+        data = _download_url(
+            url,
+            accept="application/octet-stream",
+        )
 
-    data = _download_url(
-        api_url,
-        accept="application/octet-stream",
-    )
+    else:
+        # Compatibility path for release responses that
+        # already provide browser_download_url but no asset id.
+        browser_url = asset.get(
+            "browser_download_url"
+        )
+
+        if browser_url:
+            data = _download_url(
+                browser_url,
+                accept="application/octet-stream",
+            )
+        else:
+            # Final fallback uses GitHub's stable release
+            # download URL.
+            url = _direct_release_asset_url(
+                owner,
+                repo,
+                tag,
+                asset_name,
+            )
+
+            data = _download_url(
+                url,
+                accept="application/octet-stream",
+            )
 
     if not data:
         raise ValueError(
