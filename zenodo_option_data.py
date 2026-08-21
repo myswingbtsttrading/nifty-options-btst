@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Optional
+import zipfile
 
 from historical_option_loader import (
     filter_contract,
@@ -12,10 +13,21 @@ from historical_option_loader import (
     parse_monthly_zip_filename,
 )
 
-import zipfile
-
 
 OptionRow = Dict[str, object]
+
+
+def _find_member_case_insensitive(
+    archive: zipfile.ZipFile,
+    filename: str,
+) -> str | None:
+    target = Path(filename).name.lower()
+
+    for name in archive.namelist():
+        if Path(name).name.lower() == target:
+            return name
+
+    return None
 
 
 def load_month_contract(
@@ -25,13 +37,17 @@ def load_month_contract(
     strike: float,
 ) -> List[OptionRow]:
     """
-    Load one CE/PE strike from a nested Zenodo yearly archive.
+    Load one CE/PE strike from a yearly Zenodo archive.
 
-    Structure:
+    Expected structure:
 
-        NiftyOptions YYYY.zip
-            └── November YYYY.zip
-                └── PE 10050.txt
+        NiftyOptions 2017.zip
+            ├── November 2017.zip
+            │     └── PE 10050.txt
+            └── ...
+
+    The monthly archive itself contains the historical
+    option-contract text files.
     """
 
     monthly_expiry = parse_monthly_zip_filename(
@@ -53,19 +69,16 @@ def load_month_contract(
         )
 
     with zipfile.ZipFile(
-        year_zip_path
+        year_zip_path,
+        "r",
     ) as year_archive:
 
-        matching_name = None
+        member_name = _find_member_case_insensitive(
+            year_archive,
+            monthly_zip_name,
+        )
 
-        for name in year_archive.namelist():
-            if Path(name).name.lower() == (
-                Path(monthly_zip_name).name.lower()
-            ):
-                matching_name = name
-                break
-
-        if matching_name is None:
+        if member_name is None:
             raise FileNotFoundError(
                 f"Monthly ZIP not found inside "
                 f"{year_zip_path.name}: "
@@ -73,7 +86,7 @@ def load_month_contract(
             )
 
         monthly_bytes = year_archive.read(
-            matching_name
+            member_name
         )
 
     rows = load_month_zip_bytes(
@@ -91,7 +104,8 @@ def load_month_contract(
     if not contract_rows:
         raise ValueError(
             "Option contract not found: "
-            f"{option_type.upper()} {float(strike):g} "
+            f"{option_type.upper()} "
+            f"{float(strike):g} "
             f"expiry {monthly_expiry}"
         )
 
@@ -107,8 +121,8 @@ def get_entry_quote(
     entry_time: str = "15:00",
 ) -> Optional[OptionRow]:
     """
-    Return the latest available contract observation
-    at or before the requested entry time.
+    Return the latest observation at or before the
+    requested entry time.
     """
 
     entry_clock = datetime.strptime(
@@ -124,8 +138,7 @@ def get_entry_quote(
     day_rows = [
         row
         for row in contract_rows
-        if row["timestamp"].date()
-        == entry_date
+        if row["timestamp"].date() == entry_date
     ]
 
     return find_price_at_or_before(
@@ -140,8 +153,8 @@ def get_exit_quote(
     exit_time: str = "09:15",
 ) -> Optional[OptionRow]:
     """
-    Return the first available contract observation
-    at or after the requested exit time.
+    Return the first observation at or after the
+    requested exit time.
     """
 
     exit_clock = datetime.strptime(
@@ -157,8 +170,7 @@ def get_exit_quote(
     day_rows = [
         row
         for row in contract_rows
-        if row["timestamp"].date()
-        == exit_date
+        if row["timestamp"].date() == exit_date
     ]
 
     return find_price_at_or_after(
@@ -179,9 +191,6 @@ def load_btst_contract(
 ) -> Dict[str, object]:
     """
     Load one complete historical BTST contract.
-
-    Returns the contract metadata plus the selected
-    entry and exit observations.
     """
 
     rows = load_month_contract(
