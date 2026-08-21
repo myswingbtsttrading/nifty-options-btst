@@ -5,31 +5,21 @@ from urllib.request import Request, urlopen
 import json
 
 
-GITHUB_API = (
-    "https://api.github.com"
-)
+GITHUB_API = "https://api.github.com"
 
 
-def _api_get(
-    url: str,
-) -> object:
+def _api_get(url: str) -> object:
     request = Request(
         url,
         headers={
-            "Accept": (
-                "application/vnd.github+json"
-            ),
-            "User-Agent": (
-                "nifty-options-btst"
-            ),
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "nifty-options-btst",
         },
     )
 
     with urlopen(request) as response:
         return json.loads(
-            response.read().decode(
-                "utf-8"
-            )
+            response.read().decode("utf-8")
         )
 
 
@@ -40,16 +30,14 @@ def get_release(
 ) -> dict:
     url = (
         f"{GITHUB_API}/repos/"
-        f"{owner}/{repo}/releases/tags/"
-        f"{tag}"
+        f"{owner}/{repo}/releases/tags/{tag}"
     )
 
     result = _api_get(url)
 
     if not isinstance(result, dict):
         raise ValueError(
-            "GitHub release response "
-            "is not an object"
+            "GitHub release response is not an object"
         )
 
     return result
@@ -66,28 +54,29 @@ def list_release_assets(
         tag,
     )
 
-    assets = release.get(
-        "assets",
-        [],
-    )
+    assets = release.get("assets", [])
 
-    if not isinstance(
-        assets,
-        list,
-    ):
+    if not isinstance(assets, list):
         raise ValueError(
-            "GitHub release assets "
-            "are not a list"
+            "GitHub release assets are not a list"
         )
 
     return [
         asset
         for asset in assets
-        if isinstance(
-            asset,
-            dict,
-        )
+        if isinstance(asset, dict)
     ]
+
+
+def _normalise_asset_name(
+    name: str,
+) -> str:
+    return (
+        name.strip()
+        .replace("\\", "/")
+        .rsplit("/", 1)[-1]
+        .casefold()
+    )
 
 
 def find_release_asset(
@@ -102,22 +91,30 @@ def find_release_asset(
         tag,
     )
 
-    target = asset_name.lower()
+    target = _normalise_asset_name(
+        asset_name
+    )
 
     for asset in assets:
         name = str(
-            asset.get(
-                "name",
-                "",
-            )
+            asset.get("name", "")
         )
 
-        if name.lower() == target:
+        if _normalise_asset_name(name) == target:
             return asset
 
+    available = [
+        str(
+            asset.get("name", "")
+        )
+        for asset in assets
+    ]
+
     raise FileNotFoundError(
-        f"Release asset not found: "
-        f"{asset_name}"
+        "Release asset not found: "
+        f"{asset_name}. "
+        "Available assets: "
+        f"{available}"
     )
 
 
@@ -146,6 +143,7 @@ def download_release_asset(
         )
 
     destination = Path(destination)
+
     destination.parent.mkdir(
         parents=True,
         exist_ok=True,
@@ -192,7 +190,7 @@ def download_release_assets(
     for asset_name in asset_names:
         destination = (
             destination_dir
-            / asset_name
+            / Path(asset_name).name
         )
 
         downloaded.append(
