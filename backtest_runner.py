@@ -12,6 +12,15 @@ from zenodo_option_data import (
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 NIFTY_FILE = DATA_DIR / "nifty.csv"
+OPTIONS_FILE = DATA_DIR / "nifty_options.csv"
+
+
+def _add_archive_metadata(
+    result: Dict[str, Any],
+    archive_name: str,
+) -> Dict[str, Any]:
+    result["archive"] = archive_name
+    return result
 
 
 def run_zenodo_btst_probe(
@@ -25,11 +34,10 @@ def run_zenodo_btst_probe(
     """
     Run a single BTST probe.
 
-    If archive_path points directly to a yearly ZIP, use the
-    legacy single-archive loader.
+    A directory is treated as a release-asset directory and all
+    matching yearly assets are merged automatically.
 
-    If archive_path points to a directory, resolve all release
-    assets for 2017 and use the split-aware release loader.
+    A direct ZIP path continues to use the legacy loader.
     """
 
     if archive_path is None:
@@ -48,17 +56,32 @@ def run_zenodo_btst_probe(
             exit_date=exit_date,
         )
 
-    else:
-        result = load_btst_contract(
-            year_zip_path=path,
-            monthly_zip_name=monthly_zip_name,
-            option_type=option_type,
-            strike=strike,
-            entry_date=entry_date,
-            exit_date=exit_date,
+        assets = sorted(
+            path.glob("*.zip"),
+            key=lambda item: item.name.lower(),
         )
 
-    return result
+        if assets:
+            result["archive"] = ",".join(
+                asset.name
+                for asset in assets
+            )
+
+        return result
+
+    result = load_btst_contract(
+        year_zip_path=path,
+        monthly_zip_name=monthly_zip_name,
+        option_type=option_type,
+        strike=strike,
+        entry_date=entry_date,
+        exit_date=exit_date,
+    )
+
+    return _add_archive_metadata(
+        result,
+        path.name,
+    )
 
 
 def run_release_btst_probe(
@@ -72,12 +95,9 @@ def run_release_btst_probe(
 ) -> Dict[str, Any]:
     """
     Explicit release-backed BTST probe.
-
-    This is the preferred entry point when using the GitHub
-    Release assets.
     """
 
-    return load_btst_contract_from_release(
+    result = load_btst_contract_from_release(
         release_dir=release_dir,
         year=year,
         monthly_zip_name=monthly_zip_name,
@@ -86,3 +106,18 @@ def run_release_btst_probe(
         entry_date=entry_date,
         exit_date=exit_date,
     )
+
+    release_path = Path(release_dir)
+
+    assets = sorted(
+        release_path.glob("*.zip"),
+        key=lambda item: item.name.lower(),
+    )
+
+    if assets:
+        result["archive"] = ",".join(
+            asset.name
+            for asset in assets
+        )
+
+    return result
