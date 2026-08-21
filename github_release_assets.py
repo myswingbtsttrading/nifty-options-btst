@@ -1,20 +1,32 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 import json
+import os
 
 
 GITHUB_API = "https://api.github.com"
 
 
 def _api_get(url: str) -> object:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "nifty-options-btst",
+        "X-GitHub-Api-Version": "2026-03-10",
+    }
+
+    token = os.environ.get("GH_TOKEN") or os.environ.get(
+        "GITHUB_TOKEN"
+    )
+
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
     request = Request(
         url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "nifty-options-btst",
-        },
+        headers=headers,
     )
 
     with urlopen(request) as response:
@@ -118,6 +130,49 @@ def find_release_asset(
     )
 
 
+def _direct_release_asset_url(
+    owner: str,
+    repo: str,
+    tag: str,
+    asset_name: str,
+) -> str:
+    encoded_name = quote(
+        asset_name,
+        safe="",
+    )
+
+    return (
+        f"https://github.com/"
+        f"{owner}/{repo}/releases/download/"
+        f"{quote(tag, safe='')}/"
+        f"{encoded_name}"
+    )
+
+
+def _download_url(
+    url: str,
+) -> bytes:
+    headers = {
+        "Accept": "application/octet-stream",
+        "User-Agent": "nifty-options-btst",
+    }
+
+    token = os.environ.get("GH_TOKEN") or os.environ.get(
+        "GITHUB_TOKEN"
+    )
+
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    request = Request(
+        url,
+        headers=headers,
+    )
+
+    with urlopen(request) as response:
+        return response.read()
+
+
 def download_release_asset(
     owner: str,
     repo: str,
@@ -125,23 +180,6 @@ def download_release_asset(
     asset_name: str,
     destination: str | Path,
 ) -> Path:
-    asset = find_release_asset(
-        owner,
-        repo,
-        tag,
-        asset_name,
-    )
-
-    url = asset.get(
-        "browser_download_url"
-    )
-
-    if not url:
-        raise ValueError(
-            "Release asset has no "
-            "browser download URL"
-        )
-
     destination = Path(destination)
 
     destination.parent.mkdir(
@@ -149,22 +187,47 @@ def download_release_asset(
         exist_ok=True,
     )
 
-    request = Request(
-        str(url),
-        headers={
-            "Accept": (
-                "application/octet-stream"
-            ),
-            "User-Agent": (
-                "nifty-options-btst"
-            ),
-        },
-    )
-
-    with urlopen(request) as response:
-        destination.write_bytes(
-            response.read()
+    try:
+        asset = find_release_asset(
+            owner,
+            repo,
+            tag,
+            asset_name,
         )
+
+        url = asset.get(
+            "browser_download_url"
+        )
+
+        if not url:
+            raise ValueError(
+                "Release asset has no "
+                "browser download URL"
+            )
+
+    except FileNotFoundError:
+        # GitHub's public release page can expose the assets
+        # even when the release-by-tag API response available
+        # to the runner reports an empty assets array.
+        #
+        # GitHub's documented browser download URL is stable:
+        # /releases/download/<tag>/<asset-name>
+        url = _direct_release_asset_url(
+            owner,
+            repo,
+            tag,
+            asset_name,
+        )
+
+    data = _download_url(url)
+
+    if not data:
+        raise ValueError(
+            f"Downloaded release asset is empty: "
+            f"{asset_name}"
+        )
+
+    destination.write_bytes(data)
 
     return destination
 
