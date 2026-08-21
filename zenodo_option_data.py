@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Optional
-import zipfile
 
 from historical_option_loader import (
     filter_contract,
@@ -12,42 +11,58 @@ from historical_option_loader import (
     load_month_zip_bytes,
     parse_monthly_zip_filename,
 )
+from release_asset_resolver import find_year_assets
+from split_archive_loader import merge_year_release_assets
 
 
 OptionRow = Dict[str, object]
 
 
-def _find_member_case_insensitive(
-    archive: zipfile.ZipFile,
-    filename: str,
-) -> str | None:
-    target = Path(filename).name.lower()
+def _load_year_archive_bytes(
+    release_dir: str | Path,
+    year: int,
+) -> bytes:
+    """
+    Resolve all release ZIP assets for a year and expose
+    them as one logical ZIP archive.
 
-    for name in archive.namelist():
-        if Path(name).name.lower() == target:
-            return name
+    This supports both:
 
-    return None
+        NiftyOptions 2017.zip
+
+    and split assets such as:
+
+        NiftyOptions 2017091.zip
+    """
+
+    assets = find_year_assets(
+        release_dir,
+        year,
+    )
+
+    if not assets:
+        raise FileNotFoundError(
+            f"No ZIP release assets found for {year}"
+        )
+
+    return merge_year_release_assets(
+        [
+            asset.path
+            for asset in assets
+        ]
+    )
 
 
-def load_month_contract(
-    year_zip_path: str | Path,
+def load_month_contract_from_release(
+    release_dir: str | Path,
+    year: int,
     monthly_zip_name: str,
     option_type: str,
     strike: float,
 ) -> List[OptionRow]:
     """
-    Load one CE/PE strike from a yearly Zenodo archive.
-
-    Expected structure:
-
-        NiftyOptions 2017.zip
-            ├── November 2017.zip
-            │     └── PE 10050.txt
-            └── ...
-
-    The monthly archive itself contains the historical
-    option-contract text files.
+    Load a contract directly from the release assets
+    for a given year.
     """
 
     monthly_expiry = parse_monthly_zip_filename(
@@ -60,37 +75,13 @@ def load_month_contract(
             f"{monthly_zip_name}"
         )
 
-    year_zip_path = Path(year_zip_path)
-
-    if not year_zip_path.exists():
-        raise FileNotFoundError(
-            f"Year ZIP not found: "
-            f"{year_zip_path}"
-        )
-
-    with zipfile.ZipFile(
-        year_zip_path,
-        "r",
-    ) as year_archive:
-
-        member_name = _find_member_case_insensitive(
-            year_archive,
-            monthly_zip_name,
-        )
-
-        if member_name is None:
-            raise FileNotFoundError(
-                f"Monthly ZIP not found inside "
-                f"{year_zip_path.name}: "
-                f"{monthly_zip_name}"
-            )
-
-        monthly_bytes = year_archive.read(
-            member_name
-        )
+    archive_bytes = _load_year_archive_bytes(
+        release_dir,
+        year,
+    )
 
     rows = load_month_zip_bytes(
-        monthly_bytes,
+        archive_bytes,
         monthly_expiry,
     )
 
@@ -120,11 +111,6 @@ def get_entry_quote(
     entry_date: date,
     entry_time: str = "15:00",
 ) -> Optional[OptionRow]:
-    """
-    Return the latest observation at or before the
-    requested entry time.
-    """
-
     entry_clock = datetime.strptime(
         entry_time,
         "%H:%M",
@@ -152,11 +138,6 @@ def get_exit_quote(
     exit_date: date,
     exit_time: str = "09:15",
 ) -> Optional[OptionRow]:
-    """
-    Return the first observation at or after the
-    requested exit time.
-    """
-
     exit_clock = datetime.strptime(
         exit_time,
         "%H:%M",
@@ -179,8 +160,9 @@ def get_exit_quote(
     )
 
 
-def load_btst_contract(
-    year_zip_path: str | Path,
+def load_btst_contract_from_release(
+    release_dir: str | Path,
+    year: int,
     monthly_zip_name: str,
     option_type: str,
     strike: float,
@@ -190,11 +172,13 @@ def load_btst_contract(
     exit_time: str = "09:15",
 ) -> Dict[str, object]:
     """
-    Load one complete historical BTST contract.
+    Load one complete BTST contract directly from the
+    GitHub Release asset set.
     """
 
-    rows = load_month_contract(
-        year_zip_path=year_zip_path,
+    rows = load_month_contract_from_release(
+        release_dir=release_dir,
+        year=year,
         monthly_zip_name=monthly_zip_name,
         option_type=option_type,
         strike=strike,
@@ -211,6 +195,18 @@ def load_btst_contract(
         exit_date,
         exit_time,
     )
+
+    if entry is None:
+        raise ValueError(
+            "No entry quote found for "
+            f"{entry_date} {entry_time}"
+        )
+
+    if exit_ is None:
+        raise ValueError(
+            "No exit quote found for "
+            f"{exit_date} {exit_time}"
+        )
 
     return {
         "option_type": option_type.upper(),
