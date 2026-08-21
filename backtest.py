@@ -1,28 +1,52 @@
-from dataclasses import dataclass
+def _find_next_morning(
+    option_rows: List[Dict[str, Any]],
+    entry_time: datetime,
+    strike: float,
+    option_type: str,
+    expiry: str,
+    config: BacktestConfig,
+) -> Optional[Dict[str, Any]]:
+    available_dates = sorted(
+        {
+            row["timestamp"].date()
+            for row in option_rows
+            if (
+                row.get("timestamp") is not None
+                and row["timestamp"].date()
+                > entry_time.date()
+            )
+        }
+    )
 
+    if not available_dates:
+        return None
 
-@dataclass(frozen=True)
-class BacktestConfig:
-    entry_hour: int = 15
-    entry_minute: int = 0
+    target_date = available_dates[0]
 
-    # BTST exit: next trading day's first available
-    # observation at or after 09:15.
-    exit_hour: int = 9
-    exit_minute: int = 15
+    target_timestamp = datetime.combine(
+        target_date,
+        datetime.min.time(),
+    ).replace(
+        hour=config.exit_hour,
+        minute=config.exit_minute,
+    )
 
-    strike_interval: int = 50
+    candidates = [
+        row
+        for row in option_rows
+        if (
+            row["timestamp"].date() == target_date
+            and row["timestamp"] >= target_timestamp
+            and row["strike"] == strike
+            and row["option_type"] == option_type
+            and row["expiry"] == expiry
+        )
+    ]
 
-    # Conservative execution assumptions.
-    entry_slippage_pct: float = 0.0025
-    exit_slippage_pct: float = 0.0025
+    if not candidates:
+        return None
 
-    brokerage_and_cost_pct: float = 0.0010
-
-    initial_capital: float = 100000.0
-
-    # Only trade sufficiently strong signals.
-    minimum_confidence: float = 65.0
-
-
-DEFAULT_CONFIG = BacktestConfig()
+    return min(
+        candidates,
+        key=lambda row: row["timestamp"],
+    )
