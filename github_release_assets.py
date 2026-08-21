@@ -10,19 +10,22 @@ from urllib.request import Request, urlopen
 GITHUB_API = "https://api.github.com"
 
 
+def _token() -> str | None:
+    return (
+        os.environ.get("GH_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+    )
+
+
 def _headers(
     accept: str = "application/vnd.github+json",
 ) -> dict[str, str]:
     headers = {
         "Accept": accept,
         "User-Agent": "nifty-options-btst",
-        "X-GitHub-Api-Version": "2026-03-10",
     }
 
-    token = (
-        os.environ.get("GH_TOKEN")
-        or os.environ.get("GITHUB_TOKEN")
-    )
+    token = _token()
 
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -49,7 +52,9 @@ def get_release(
 ) -> dict:
     url = (
         f"{GITHUB_API}/repos/"
-        f"{owner}/{repo}/releases/tags/"
+        f"{quote(owner, safe='')}/"
+        f"{quote(repo, safe='')}/"
+        f"releases/tags/"
         f"{quote(tag, safe='')}"
     )
 
@@ -61,6 +66,34 @@ def get_release(
         )
 
     return result
+
+
+def _asset_from_release(
+    release: dict,
+    asset_name: str,
+) -> dict | None:
+    assets = release.get("assets")
+
+    if not isinstance(assets, list):
+        return None
+
+    target = _normalise_asset_name(
+        asset_name
+    )
+
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+
+        if (
+            _normalise_asset_name(
+                asset.get("name", "")
+            )
+            == target
+        ):
+            return asset
+
+    return None
 
 
 def list_release_assets(
@@ -76,35 +109,14 @@ def list_release_assets(
 
     assets = release.get("assets")
 
-    if isinstance(assets, list) and assets:
+    if isinstance(assets, list):
         return [
             asset
             for asset in assets
             if isinstance(asset, dict)
         ]
 
-    release_id = release.get("id")
-
-    if not release_id:
-        return []
-
-    url = (
-        f"{GITHUB_API}/repos/"
-        f"{owner}/{repo}/releases/"
-        f"{release_id}/assets"
-        f"?per_page=100"
-    )
-
-    result = _api_get(url)
-
-    if not isinstance(result, list):
-        return []
-
-    return [
-        asset
-        for asset in result
-        if isinstance(asset, dict)
-    ]
+    return []
 
 
 def _normalise_asset_name(
@@ -125,35 +137,40 @@ def find_release_asset(
     tag: str,
     asset_name: str,
 ) -> dict:
-    assets = list_release_assets(
+    release = get_release(
         owner,
         repo,
         tag,
     )
 
-    target = _normalise_asset_name(
-        asset_name
+    asset = _asset_from_release(
+        release,
+        asset_name,
     )
 
-    for asset in assets:
-        name = asset.get("name", "")
+    if asset is not None:
+        return asset
 
-        if (
-            _normalise_asset_name(name)
-            == target
-        ):
-            return asset
+    assets = release.get("assets")
 
-    available = [
-        str(asset.get("name", ""))
-        for asset in assets
-    ]
+    available = []
+
+    if isinstance(assets, list):
+        available = [
+            str(
+                asset.get(
+                    "name",
+                    "",
+                )
+            )
+            for asset in assets
+            if isinstance(asset, dict)
+        ]
 
     raise FileNotFoundError(
         "Release asset not found: "
         f"{asset_name}. "
-        "Available assets: "
-        f"{available}"
+        f"Available assets: {available}"
     )
 
 
@@ -178,10 +195,10 @@ def _direct_release_asset_url(
     asset_name: str,
 ) -> str:
     return (
-        f"https://github.com/"
+        "https://github.com/"
         f"{quote(owner, safe='')}/"
         f"{quote(repo, safe='')}/"
-        f"releases/download/"
+        "releases/download/"
         f"{quote(tag, safe='')}/"
         f"{quote(asset_name, safe='')}"
     )
@@ -201,124 +218,55 @@ def download_release_asset(
         exist_ok=True,
     )
 
+    # First obtain the release metadata.
     release = get_release(
         owner,
         repo,
         tag,
     )
 
-    release_assets = release.get(
-        "assets"
+    asset = _asset_from_release(
+        release,
+        asset_name,
     )
 
-    asset = None
-
-    if isinstance(
-        release_assets,
-        list,
-    ):
-        target = _normalise_asset_name(
-            asset_name
-        )
-
-        for candidate in release_assets:
-            if not isinstance(
-                candidate,
-                dict,
-            ):
-                continue
-
-            if (
-                _normalise_asset_name(
-                    candidate.get(
-                        "name",
-                        "",
-                    )
-                )
-                == target
-            ):
-                asset = candidate
-                break
-
-    # If the normal release response did not expose
-    # the asset, try the dedicated asset endpoint.
-    if asset is None:
-        release_id = release.get(
-            "id"
-        )
-
-        if release_id:
-            url = (
-                f"{GITHUB_API}/repos/"
-                f"{owner}/{repo}/releases/"
-                f"{release_id}/assets"
-                f"?per_page=100"
-            )
-
-            result = _api_get(url)
-
-            if isinstance(
-                result,
-                list,
-            ):
-                target = (
-                    _normalise_asset_name(
-                        asset_name
-                    )
-                )
-
-                for candidate in result:
-                    if not isinstance(
-                        candidate,
-                        dict,
-                    ):
-                        continue
-
-                    if (
-                        _normalise_asset_name(
-                            candidate.get(
-                                "name",
-                                "",
-                            )
-                        )
-                        == target
-                    ):
-                        asset = candidate
-                        break
-
-    # Real GitHub release asset.
     if asset is not None:
-        asset_id = asset.get("id")
+        browser_url = asset.get(
+            "browser_download_url"
+        )
 
-        if asset_id:
-            url = (
-                f"{GITHUB_API}/repos/"
-                f"{owner}/{repo}/releases/assets/"
-                f"{asset_id}"
-            )
-
-            data = _download_url(url)
-
-        else:
-            browser_url = asset.get(
-                "browser_download_url"
-            )
-
-            if not browser_url:
-                raise FileNotFoundError(
-                    "Release asset has no download URL: "
-                    f"{asset_name}"
-                )
-
+        if browser_url:
             data = _download_url(
                 browser_url
             )
+        else:
+            asset_id = asset.get("id")
+
+            if not asset_id:
+                raise ValueError(
+                    "Release asset has neither "
+                    "browser_download_url nor id: "
+                    f"{asset_name}"
+                )
+
+            api_url = (
+                f"{GITHUB_API}/repos/"
+                f"{quote(owner, safe='')}/"
+                f"{quote(repo, safe='')}/"
+                "releases/assets/"
+                f"{asset_id}"
+            )
+
+            data = _download_url(
+                api_url
+            )
 
     else:
-        # Compatibility/direct-download fallback.
+        # GitHub's stable release-download URL.
         #
-        # This is also useful for tests and for GitHub's
-        # stable release-download URL.
+        # This is the fallback needed when the API response
+        # does not expose assets even though the release page
+        # contains them.
         url = _direct_release_asset_url(
             owner,
             repo,
@@ -326,7 +274,9 @@ def download_release_asset(
             asset_name,
         )
 
-        data = _download_url(url)
+        data = _download_url(
+            url
+        )
 
     if not data:
         raise ValueError(
@@ -357,7 +307,7 @@ def download_release_assets(
         exist_ok=True,
     )
 
-    downloaded: list[Path] = []
+    downloaded = []
 
     for asset_name in asset_names:
         destination = (
