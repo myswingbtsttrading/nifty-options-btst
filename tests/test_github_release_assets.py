@@ -156,7 +156,28 @@ def test_missing_release_asset_raises(
         )
 
 
-def test_download_release_asset(
+def test_direct_release_asset_url():
+    url = (
+        github_release_assets
+        ._direct_release_asset_url(
+            "myswingbtsttrading",
+            "nifty-options-btst",
+            "data-2017-v1",
+            "NiftyOptions 2017.zip",
+        )
+    )
+
+    assert url == (
+        "https://github.com/"
+        "myswingbtsttrading/"
+        "nifty-options-btst/"
+        "releases/download/"
+        "data-2017-v1/"
+        "NiftyOptions%202017.zip"
+    )
+
+
+def test_download_uses_api_asset(
     monkeypatch,
     tmp_path,
 ):
@@ -178,40 +199,24 @@ def test_download_release_asset(
         lambda url: expected,
     )
 
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(
-            self,
-            exc_type,
-            exc_value,
-            traceback,
-        ):
-            return False
-
-        def read(self):
-            return b"release-data"
-
     monkeypatch.setattr(
         github_release_assets,
-        "urlopen",
-        lambda request: FakeResponse(),
+        "_download_url",
+        lambda url: b"release-data",
     )
 
     destination = (
         tmp_path
-        / "downloads"
         / "NiftyOptions 2017.zip"
     )
 
     result = (
         github_release_assets.download_release_asset(
-            owner="myswingbtsttrading",
-            repo="nifty-options-btst",
-            tag="data-2017-v1",
-            asset_name="NiftyOptions 2017.zip",
-            destination=destination,
+            "myswingbtsttrading",
+            "nifty-options-btst",
+            "data-2017-v1",
+            "NiftyOptions 2017.zip",
+            destination,
         )
     )
 
@@ -222,26 +227,13 @@ def test_download_release_asset(
     )
 
 
-def test_download_multiple_assets(
+def test_download_falls_back_to_direct_url(
     monkeypatch,
     tmp_path,
 ):
     expected = {
         "tag_name": "data-2017-v1",
-        "assets": [
-            {
-                "name":
-                    "NiftyOptions 2017.zip",
-                "browser_download_url":
-                    "https://example.com/2017.zip",
-            },
-            {
-                "name":
-                    "NiftyOptions 2017091.zip",
-                "browser_download_url":
-                    "https://example.com/2017091.zip",
-            },
-        ],
+        "assets": [],
     }
 
     monkeypatch.setattr(
@@ -250,25 +242,68 @@ def test_download_multiple_assets(
         lambda url: expected,
     )
 
-    class FakeResponse:
-        def __enter__(self):
-            return self
+    captured = {}
 
-        def __exit__(
-            self,
-            exc_type,
-            exc_value,
-            traceback,
-        ):
-            return False
-
-        def read(self):
-            return b"release-data"
+    def fake_download(url):
+        captured["url"] = url
+        return b"release-data"
 
     monkeypatch.setattr(
         github_release_assets,
-        "urlopen",
-        lambda request: FakeResponse(),
+        "_download_url",
+        fake_download,
+    )
+
+    destination = (
+        tmp_path
+        / "NiftyOptions 2017.zip"
+    )
+
+    result = (
+        github_release_assets.download_release_asset(
+            "myswingbtsttrading",
+            "nifty-options-btst",
+            "data-2017-v1",
+            "NiftyOptions 2017.zip",
+            destination,
+        )
+    )
+
+    assert result == destination
+    assert (
+        destination.read_bytes()
+        == b"release-data"
+    )
+
+    assert captured["url"] == (
+        "https://github.com/"
+        "myswingbtsttrading/"
+        "nifty-options-btst/"
+        "releases/download/"
+        "data-2017-v1/"
+        "NiftyOptions%202017.zip"
+    )
+
+
+def test_download_multiple_assets(
+    monkeypatch,
+    tmp_path,
+):
+    expected = {
+        "tag_name": "data-2017-v1",
+        "assets": [],
+    }
+
+    monkeypatch.setattr(
+        github_release_assets,
+        "_api_get",
+        lambda url: expected,
+    )
+
+    monkeypatch.setattr(
+        github_release_assets,
+        "_download_url",
+        lambda url: b"release-data",
     )
 
     result = (
