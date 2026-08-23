@@ -37,12 +37,12 @@ jobs:
 
           gh release download data-2017-v1 \
             --repo myswingbtsttrading/nifty-options-btst \
-            --pattern "NiftyOptions 2017.zip" \
+            --pattern "October.2017.zip" \
             --dir release-data
 
           gh release download data-2017-v1 \
             --repo myswingbtsttrading/nifty-options-btst \
-            --pattern "NiftyOptions 2017091.zip" \
+            --pattern "November.2017.zip" \
             --dir release-data
 
           echo "Downloaded release assets:"
@@ -57,8 +57,8 @@ jobs:
           release_dir = Path("release-data")
 
           expected = [
-              "NiftyOptions 2017.zip",
-              "NiftyOptions 2017091.zip",
+              "October.2017.zip",
+              "November.2017.zip",
           ]
 
           for name in expected:
@@ -71,7 +71,9 @@ jobs:
 
               size = path.stat().st_size
 
-              print(f"{name}: {size:,} bytes")
+              print(
+                  f"{name}: {size:,} bytes"
+              )
 
               if size == 0:
                   raise SystemExit(
@@ -83,11 +85,13 @@ jobs:
 
                   if bad_file is not None:
                       raise SystemExit(
-                          f"ERROR: Corrupt ZIP {name}: {bad_file}"
+                          f"ERROR: Corrupt ZIP "
+                          f"{name}: {bad_file}"
                       )
 
                   print(
-                      f"  ZIP OK: {len(archive.namelist())} entries"
+                      f"ZIP OK: "
+                      f"{len(archive.namelist())} entries"
                   )
 
           print("STATUS: RELEASE ASSETS PASS")
@@ -106,7 +110,7 @@ jobs:
           result = run_release_btst_probe(
               release_dir=Path("release-data"),
               year=2017,
-              monthly_zip_name="November 2017.zip",
+              monthly_zip_name="November.2017.zip",
               option_type="PE",
               strike=10050,
               entry_date=date(2017, 10, 26),
@@ -115,11 +119,29 @@ jobs:
 
           print("Release BTST probe")
           print("==================")
-          print(f"Archive: {result.get('archive')}")
-          print(f"Monthly ZIP: {result.get('monthly_zip')}")
-          print(f"Option: {result['option_type']}")
-          print(f"Strike: {result['strike']}")
-          print(f"Entry: {result['entry']}")
-          print(f"Exit: {result['exit']}")
+          print(
+              f"Archive: "
+              f"{result.get('archive')}"
+          )
+          print(
+              f"Monthly ZIP: "
+              f"{result.get('monthly_zip')}"
+          )
+          print(
+              f"Option: "
+              f"{result['option_type']}"
+          )
+          print(
+              f"Strike: "
+              f"{result['strike']}"
+          )
+          print(
+              f"Entry: "
+              f"{result['entry']}"
+          )
+          print(
+              f"Exit: "
+              f"{result['exit']}"
+          )
           print("STATUS: PASS")
           PY
