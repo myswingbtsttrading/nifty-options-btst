@@ -24,20 +24,37 @@ jobs:
           repo = "nifty-options-btst"
           tag = "data-2017-v1"
 
+          expected = {
+              "January 2017.zip",
+              "February 2017.zip",
+              "March 2017.zip",
+              "April 2017.zip",
+              "May 2017.zip",
+              "June 2017.zip",
+              "July 2017.zip",
+              "August 2017.zip",
+              "September 2017.zip",
+              "October 2017.zip",
+              "November 2017.zip",
+              "December 2017.zip",
+          }
+
           api_url = (
               f"https://api.github.com/repos/"
               f"{owner}/{repo}/releases/tags/{tag}"
           )
 
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": (
+                  f"Bearer {os.environ['GH_TOKEN']}"
+              ),
+              "User-Agent": "nifty-options-btst",
+          }
+
           request = urllib.request.Request(
               api_url,
-              headers={
-                  "Accept": "application/vnd.github+json",
-                  "Authorization": (
-                      f"Bearer {os.environ['GH_TOKEN']}"
-                  ),
-                  "User-Agent": "nifty-options-btst",
-              },
+              headers=headers,
           )
 
           with urllib.request.urlopen(request) as response:
@@ -51,22 +68,11 @@ jobs:
           print(f"Name: {release.get('name')}")
           print(f"Release ID: {release.get('id')}")
 
-          assets_url = release.get("assets_url")
-
-          if not assets_url:
-              raise SystemExit(
-                  "ERROR: Release has no assets_url."
-              )
+          assets_url = release["assets_url"]
 
           assets_request = urllib.request.Request(
               assets_url,
-              headers={
-                  "Accept": "application/vnd.github+json",
-                  "Authorization": (
-                      f"Bearer {os.environ['GH_TOKEN']}"
-                  ),
-                  "User-Agent": "nifty-options-btst",
-              },
+              headers=headers,
           )
 
           with urllib.request.urlopen(
@@ -79,35 +85,48 @@ jobs:
           print()
           print(f"API asset count: {len(assets)}")
           print()
+          print("Release assets:")
+
+          actual = set()
 
           for asset in assets:
+              name = asset.get("name")
+              actual.add(name)
+
               print(
-                  f"- {asset.get('name')} "
-                  f"| size={asset.get('size')} "
+                  f"- {name} "
+                  f"| size={asset.get('size')} bytes "
                   f"| id={asset.get('id')} "
                   f"| state={asset.get('state')}"
               )
 
-          expected = {
-              "NiftyOptions 2017.zip",
-              "NiftyOptions 2017091.zip",
-          }
-
-          actual = {
-              asset.get("name")
-              for asset in assets
-          }
-
           missing = expected - actual
+          unexpected = actual - expected
+
+          print()
 
           if missing:
+              print("Missing assets:")
+              for name in sorted(missing):
+                  print(f"- {name}")
+
               raise SystemExit(
-                  "ERROR: Missing release assets: "
-                  + ", ".join(sorted(missing))
+                  "ERROR: Required release assets are missing."
+              )
+
+          if unexpected:
+              print("Unexpected assets:")
+              for name in sorted(unexpected):
+                  print(f"- {name}")
+
+          if len(assets) != 12:
+              raise SystemExit(
+                  f"ERROR: Expected 12 release assets, "
+                  f"but API returned {len(assets)}."
               )
 
           print()
           print("STATUS: PASS")
-          print("Both required release assets are visible")
-          print("through the GitHub release-assets API.")
+          print("All 12 monthly 2017 release assets are")
+          print("visible through the GitHub release API.")
           PY
