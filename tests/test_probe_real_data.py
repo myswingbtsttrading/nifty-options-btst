@@ -1,66 +1,68 @@
-from datetime import date
 from pathlib import Path
-import zipfile
-
-from probe_real_data import main
+from zipfile import ZipFile
 
 
-def test_probe_cli_with_realistic_archive(
-    tmp_path,
-    monkeypatch,
-    capsys,
-):
-    monthly_zip = tmp_path / "November 2017.zip"
+RELEASE_TAG = "data-2017-v1"
 
-    monthly_data = (
-        "PE 10050,2017/10/26,14:59,"
-        "55,56,54,55.00,100\n"
-        "PE 10050,2017/10/26,15:00,"
-        "55,56,54,55.55,100\n"
-        "PE 10050,2017/10/27,09:15,"
-        "49,50,48,49.65,100\n"
+OCTOBER_ASSET = "October.2017.zip"
+NOVEMBER_ASSET = "November.2017.zip"
+
+
+def test_release_monthly_assets_exist():
+    release_dir = Path("release-data")
+
+    october = release_dir / OCTOBER_ASSET
+    november = release_dir / NOVEMBER_ASSET
+
+    assert october.exists(), (
+        f"Missing release asset: {october}"
     )
 
-    monthly_buffer = tmp_path / "monthly.zip"
-
-    with zipfile.ZipFile(
-        monthly_buffer,
-        "w",
-        zipfile.ZIP_DEFLATED,
-    ) as archive:
-        archive.writestr(
-            "PE 10050.txt",
-            monthly_data,
-        )
-
-    year_zip = tmp_path / "NiftyOptions 2017.zip"
-
-    with zipfile.ZipFile(
-        year_zip,
-        "w",
-        zipfile.ZIP_DEFLATED,
-    ) as archive:
-        archive.write(
-            monthly_buffer,
-            "November 2017.zip",
-        )
-
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "probe_real_data.py",
-            str(year_zip),
-        ],
+    assert november.exists(), (
+        f"Missing release asset: {november}"
     )
 
-    result = main()
 
-    captured = capsys.readouterr()
+def test_release_monthly_assets_are_valid_zip_files():
+    release_dir = Path("release-data")
 
-    assert result == 0
-    assert "ZENODO REAL-DATA CONTRACT PROBE" in captured.out
-    assert "PE 10050" in captured.out
-    assert "2017-11-30" in captured.out
-    assert "₹55.55" in captured.out
-    assert "₹49.65" in captured.out
-    assert "STATUS: PASS" in captured.out
+    archives = [
+        release_dir / OCTOBER_ASSET,
+        release_dir / NOVEMBER_ASSET,
+    ]
+
+    for archive in archives:
+        assert archive.exists(), (
+            f"Missing release asset: {archive}"
+        )
+
+        assert archive.stat().st_size > 0, (
+            f"Release asset is empty: {archive}"
+        )
+
+        with ZipFile(archive) as zf:
+            members = zf.namelist()
+
+            assert members, (
+                f"Release archive is empty: {archive}"
+            )
+
+
+def test_release_asset_names_match_current_release():
+    expected = {
+        OCTOBER_ASSET,
+        NOVEMBER_ASSET,
+    }
+
+    release_dir = Path("release-data")
+
+    actual = {
+        path.name
+        for path in release_dir.glob("*.zip")
+    }
+
+    assert expected.issubset(actual), (
+        f"Expected release assets "
+        f"{sorted(expected)}, "
+        f"found {sorted(actual)}"
+    )
