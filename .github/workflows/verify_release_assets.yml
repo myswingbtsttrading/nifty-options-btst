@@ -1,19 +1,16 @@
-name: Verify 2017 Release Assets
+name: Verify Release Assets
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: read
 
 jobs:
   verify-release-assets:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Verify GitHub release assets
+      - name: Verify all 12 monthly release assets
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python - <<'PY'
           import json
@@ -25,18 +22,18 @@ jobs:
           tag = "data-2017-v1"
 
           expected = {
-              "January 2017.zip",
-              "February 2017.zip",
-              "March 2017.zip",
-              "April 2017.zip",
-              "May 2017.zip",
-              "June 2017.zip",
-              "July 2017.zip",
-              "August 2017.zip",
-              "September 2017.zip",
-              "October 2017.zip",
-              "November 2017.zip",
-              "December 2017.zip",
+              "January.2017.zip",
+              "February.2017.zip",
+              "March.2017.zip",
+              "April.2017.zip",
+              "May.2017.zip",
+              "June.2017.zip",
+              "July.2017.zip",
+              "August.2017.zip",
+              "September.2017.zip",
+              "October.2017.zip",
+              "November.2017.zip",
+              "December.2017.zip",
           }
 
           api_url = (
@@ -82,19 +79,21 @@ jobs:
                   response.read().decode("utf-8")
               )
 
+          actual = {
+              asset.get("name")
+              for asset in assets
+          }
+
           print()
-          print(f"API asset count: {len(assets)}")
+          print(
+              f"API asset count: {len(assets)}"
+          )
           print()
           print("Release assets:")
 
-          actual = set()
-
           for asset in assets:
-              name = asset.get("name")
-              actual.add(name)
-
               print(
-                  f"- {name} "
+                  f"- {asset.get('name')} "
                   f"| size={asset.get('size')} bytes "
                   f"| id={asset.get('id')} "
                   f"| state={asset.get('state')}"
@@ -125,8 +124,20 @@ jobs:
                   f"but API returned {len(assets)}."
               )
 
+          if any(
+              asset.get("state") != "uploaded"
+              for asset in assets
+          ):
+              raise SystemExit(
+                  "ERROR: One or more release assets "
+                  "are not in uploaded state."
+              )
+
           print()
           print("STATUS: PASS")
-          print("All 12 monthly 2017 release assets are")
-          print("visible through the GitHub release API.")
+          print(
+              "All 12 monthly 2017 release assets "
+              "are visible through the GitHub "
+              "release API."
+          )
           PY
