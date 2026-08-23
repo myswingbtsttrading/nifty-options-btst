@@ -52,8 +52,7 @@ def test_list_release_assets(
     )
 
     assets = (
-        github_release_assets
-        .list_release_assets(
+        github_release_assets.list_release_assets(
             "myswingbtsttrading",
             "nifty-options-btst",
             "data-2017-v1",
@@ -83,8 +82,7 @@ def test_find_release_asset_is_case_insensitive(
     )
 
     asset = (
-        github_release_assets
-        .find_release_asset(
+        github_release_assets.find_release_asset(
             "myswingbtsttrading",
             "nifty-options-btst",
             "data-2017-v1",
@@ -118,13 +116,11 @@ def test_find_release_asset_strips_path(
     )
 
     asset = (
-        github_release_assets
-        .find_release_asset(
+        github_release_assets.find_release_asset(
             "myswingbtsttrading",
             "nifty-options-btst",
             "data-2017-v1",
-            "/downloads/"
-            "NiftyOptions 2017091.zip",
+            "/downloads/NiftyOptions 2017091.zip",
         )
     )
 
@@ -134,7 +130,7 @@ def test_find_release_asset_strips_path(
     )
 
 
-def test_find_release_asset_matches_dotted_filename(
+def test_find_release_asset_matches_dots_and_spaces(
     monkeypatch,
 ):
     expected = {
@@ -154,8 +150,7 @@ def test_find_release_asset_matches_dotted_filename(
     )
 
     asset = (
-        github_release_assets
-        .find_release_asset(
+        github_release_assets.find_release_asset(
             "myswingbtsttrading",
             "nifty-options-btst",
             "data-2017-v1",
@@ -169,32 +164,55 @@ def test_find_release_asset_matches_dotted_filename(
     )
 
 
-def test_normalise_asset_name_matches_space_and_dot():
-    assert (
-        github_release_assets
-        ._normalise_asset_name(
-            "November 2017.zip"
-        )
-        ==
-        github_release_assets
-        ._normalise_asset_name(
-            "November.2017.zip"
-        )
-    )
-
-
-def test_asset_name_candidates_include_dotted_name():
-    candidates = (
-        github_release_assets
-        ._asset_name_candidates(
-            "November 2017.zip"
-        )
-    )
-
-    assert candidates == [
-        "November 2017.zip",
-        "November.2017.zip",
+def test_find_release_asset_matches_all_months(
+    monkeypatch,
+):
+    months = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
     ]
+
+    expected = {
+        "tag_name": "data-2017-v1",
+        "assets": [
+            {
+                "name":
+                    f"{month}.2017.zip",
+            }
+            for month in months
+        ],
+    }
+
+    monkeypatch.setattr(
+        github_release_assets,
+        "_api_get",
+        lambda url: expected,
+    )
+
+    for month in months:
+        asset = (
+            github_release_assets.find_release_asset(
+                "myswingbtsttrading",
+                "nifty-options-btst",
+                "data-2017-v1",
+                f"{month} 2017.zip",
+            )
+        )
+
+        assert (
+            asset["name"]
+            == f"{month}.2017.zip"
+        )
 
 
 def test_missing_release_asset_raises(
@@ -278,8 +296,7 @@ def test_download_uses_api_asset(
     )
 
     result = (
-        github_release_assets
-        .download_release_asset(
+        github_release_assets.download_release_asset(
             "myswingbtsttrading",
             "nifty-options-btst",
             "data-2017-v1",
@@ -296,7 +313,7 @@ def test_download_uses_api_asset(
     )
 
 
-def test_download_dotted_release_asset(
+def test_download_dot_named_asset_using_space_name(
     monkeypatch,
     tmp_path,
 ):
@@ -307,8 +324,7 @@ def test_download_dotted_release_asset(
                 "name":
                     "November.2017.zip",
                 "browser_download_url":
-                    "https://example.com/"
-                    "November.2017.zip",
+                    "https://example.com/November.2017.zip",
             },
         ],
     }
@@ -319,10 +335,16 @@ def test_download_dotted_release_asset(
         lambda url: expected,
     )
 
+    captured = {}
+
+    def fake_download(url):
+        captured["url"] = url
+        return b"release-data"
+
     monkeypatch.setattr(
         github_release_assets,
         "_download_url",
-        lambda url: b"release-data",
+        fake_download,
     )
 
     destination = (
@@ -331,8 +353,7 @@ def test_download_dotted_release_asset(
     )
 
     result = (
-        github_release_assets
-        .download_release_asset(
+        github_release_assets.download_release_asset(
             "myswingbtsttrading",
             "nifty-options-btst",
             "data-2017-v1",
@@ -346,6 +367,11 @@ def test_download_dotted_release_asset(
     assert (
         destination.read_bytes()
         == b"release-data"
+    )
+
+    assert captured["url"] == (
+        "https://example.com/"
+        "November.2017.zip"
     )
 
 
@@ -382,8 +408,7 @@ def test_download_falls_back_to_direct_url(
     )
 
     result = (
-        github_release_assets
-        .download_release_asset(
+        github_release_assets.download_release_asset(
             "myswingbtsttrading",
             "nifty-options-btst",
             "data-2017-v1",
@@ -415,7 +440,20 @@ def test_download_multiple_assets(
 ):
     expected = {
         "tag_name": "data-2017-v1",
-        "assets": [],
+        "assets": [
+            {
+                "name":
+                    "January.2017.zip",
+                "browser_download_url":
+                    "https://example.com/January.2017.zip",
+            },
+            {
+                "name":
+                    "November.2017.zip",
+                "browser_download_url":
+                    "https://example.com/November.2017.zip",
+            },
+        ],
     }
 
     monkeypatch.setattr(
@@ -431,14 +469,13 @@ def test_download_multiple_assets(
     )
 
     result = (
-        github_release_assets
-        .download_release_assets(
+        github_release_assets.download_release_assets(
             owner="myswingbtsttrading",
             repo="nifty-options-btst",
             tag="data-2017-v1",
             asset_names=[
-                "NiftyOptions 2017.zip",
-                "NiftyOptions 2017091.zip",
+                "January 2017.zip",
+                "November 2017.zip",
             ],
             destination_dir=tmp_path,
         )
@@ -455,6 +492,6 @@ def test_download_multiple_assets(
         path.name
         for path in result
     } == {
-        "NiftyOptions 2017.zip",
-        "NiftyOptions 2017091.zip",
+        "January 2017.zip",
+        "November 2017.zip",
     }
