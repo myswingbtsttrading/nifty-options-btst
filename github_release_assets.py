@@ -68,6 +68,36 @@ def get_release(
     return result
 
 
+def _normalise_asset_name(
+    name: str,
+) -> str:
+    """
+    Normalise release asset names so that:
+
+        November 2017.zip
+        November.2017.zip
+
+    are treated as the same asset.
+
+    GitHub release assets may be uploaded with spaces converted
+    to periods, while the application may request the original
+    filename containing spaces.
+    """
+    value = (
+        str(name)
+        .strip()
+        .replace("\\", "/")
+        .rsplit("/", 1)[-1]
+        .casefold()
+    )
+
+    # GitHub-uploaded filenames may use periods instead of spaces.
+    value = value.replace(".", " ")
+
+    # Collapse repeated whitespace.
+    return " ".join(value.split())
+
+
 def _asset_from_release(
     release: dict,
     asset_name: str,
@@ -117,18 +147,6 @@ def list_release_assets(
         ]
 
     return []
-
-
-def _normalise_asset_name(
-    name: str,
-) -> str:
-    return (
-        str(name)
-        .strip()
-        .replace("\\", "/")
-        .rsplit("/", 1)[-1]
-        .casefold()
-    )
 
 
 def find_release_asset(
@@ -204,6 +222,67 @@ def _direct_release_asset_url(
     )
 
 
+def _asset_name_candidates(
+    asset_name: str,
+) -> list[str]:
+    """
+    Return possible release-download filenames.
+
+    The primary filename is kept unchanged. A second candidate
+    replaces spaces with periods because GitHub-uploaded release
+    assets in this repository currently use names such as:
+
+        November.2017.zip
+    """
+    candidates = [asset_name]
+
+    dotted = asset_name.replace(
+        " ",
+        ".",
+    )
+
+    if dotted != asset_name:
+        candidates.append(dotted)
+
+    return candidates
+
+
+def _download_direct_release_asset(
+    owner: str,
+    repo: str,
+    tag: str,
+    asset_name: str,
+) -> bytes:
+    last_error: Exception | None = None
+
+    for candidate in _asset_name_candidates(
+        asset_name
+    ):
+        url = _direct_release_asset_url(
+            owner,
+            repo,
+            tag,
+            candidate,
+        )
+
+        try:
+            data = _download_url(url)
+
+            if data:
+                return data
+
+        except Exception as exc:
+            last_error = exc
+
+    if last_error is not None:
+        raise last_error
+
+    raise ValueError(
+        "Downloaded release asset is empty: "
+        f"{asset_name}"
+    )
+
+
 def download_release_asset(
     owner: str,
     repo: str,
@@ -264,18 +343,13 @@ def download_release_asset(
     else:
         # GitHub's stable release-download URL.
         #
-        # This is the fallback needed when the API response
-        # does not expose assets even though the release page
-        # contains them.
-        url = _direct_release_asset_url(
-            owner,
-            repo,
-            tag,
-            asset_name,
-        )
-
-        data = _download_url(
-            url
+        # Try the requested filename first and then the
+        # dotted filename used by the current release.
+        data = _download_direct_release_asset(
+            owner=owner,
+            repo=repo,
+            tag=tag,
+            asset_name=asset_name,
         )
 
     if not data:
