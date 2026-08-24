@@ -1,3 +1,4 @@
+```python
 from __future__ import annotations
 
 import io
@@ -15,7 +16,9 @@ OPTION_FILENAME_PATTERN = re.compile(
 
 MONTHLY_ZIP_PATTERN = re.compile(
     r"^(January|February|March|April|May|June|July|August|"
-    r"September|October|November|December)\s+(\d{4})\.zip$",
+    r"September|October|November|December)"
+    r"[ ._-]+"
+    r"(\d{4})\.zip$",
     re.IGNORECASE,
 )
 
@@ -58,10 +61,12 @@ def parse_monthly_zip_filename(
     Convert a monthly archive name such as:
 
         November 2017.zip
+        November.2017.zip
+        November-2017.zip
+        November_2017.zip
 
     into the corresponding monthly expiry date.
     """
-
     name = Path(filename).name.strip()
 
     match = MONTHLY_ZIP_PATTERN.match(name)
@@ -230,6 +235,7 @@ def load_month_zip(
         path,
         "rb",
     ) as file_obj:
+
         return load_month_zip_bytes(
             file_obj.read(),
             expiry,
@@ -384,3 +390,4 @@ def filter_contract(
             or row.get("expiry") == expiry
         )
     ]
+```
