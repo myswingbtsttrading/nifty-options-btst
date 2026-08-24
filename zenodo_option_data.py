@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Optional
+import io
+import re
 import zipfile
 
 from historical_option_loader import (
@@ -19,6 +21,37 @@ from split_archive_loader import merge_year_release_assets
 OptionRow = Dict[str, object]
 
 
+def _normalise_monthly_zip_name(
+    filename: str,
+) -> str:
+    """
+    Normalise monthly ZIP naming so both of these work:
+
+        November 2017.zip
+        November.2017.zip
+
+    The release currently stores monthly assets using the
+    dot form.
+    """
+    name = Path(filename).name.strip()
+
+    match = re.match(
+        r"^(January|February|March|April|May|June|July|August|"
+        r"September|October|November|December)"
+        r"[ .]+(\d{4})\.zip$",
+        name,
+        re.IGNORECASE,
+    )
+
+    if not match:
+        return name
+
+    return (
+        f"{match.group(1)} "
+        f"{match.group(2)}.zip"
+    )
+
+
 def _find_member_case_insensitive(
     archive: zipfile.ZipFile,
     filename: str,
@@ -32,6 +65,60 @@ def _find_member_case_insensitive(
     return None
 
 
+def _find_monthly_member(
+    archive: zipfile.ZipFile,
+    filename: str,
+) -> str | None:
+    """
+    Find a monthly ZIP member while accepting both:
+
+        November 2017.zip
+        November.2017.zip
+    """
+    target = _normalise_monthly_zip_name(filename).lower()
+
+    for name in archive.namelist():
+        member_name = Path(name).name
+
+        if (
+            _normalise_monthly_zip_name(member_name).lower()
+            == target
+        ):
+            return name
+
+    return None
+
+
+def _find_direct_monthly_asset(
+    release_dir: str | Path,
+    monthly_zip_name: str,
+    year: int,
+) -> Path | None:
+    """
+    Find a release asset that is itself the monthly ZIP.
+
+    Example:
+
+        release-data/November.2017.zip
+
+    This is the current release layout.
+    """
+    release_dir = Path(release_dir)
+
+    target = _normalise_monthly_zip_name(
+        monthly_zip_name
+    ).lower()
+
+    for path in release_dir.glob("*.zip"):
+        if (
+            _normalise_monthly_zip_name(path.name).lower()
+            == target
+        ):
+            return path
+
+    return None
+
+
 def load_month_contract(
     year_zip_path: str | Path,
     monthly_zip_name: str,
@@ -41,9 +128,10 @@ def load_month_contract(
     """
     Backward-compatible loader for a single yearly ZIP.
     """
-
     monthly_expiry = parse_monthly_zip_filename(
-        monthly_zip_name
+        _normalise_monthly_zip_name(
+            monthly_zip_name
+        )
     )
 
     if monthly_expiry is None:
@@ -64,8 +152,7 @@ def load_month_contract(
         year_zip_path,
         "r",
     ) as archive:
-
-        member_name = _find_member_case_insensitive(
+        member_name = _find_monthly_member(
             archive,
             monthly_zip_name,
         )
@@ -129,6 +216,41 @@ def _load_year_archive_bytes(
     )
 
 
+class _temporary_zip:
+    """
+    In-memory ZipFile context manager.
+    """
+
+    def __init__(
+        self,
+        data: bytes,
+    ):
+        self._buffer = io.BytesIO(data)
+        self._archive: zipfile.ZipFile | None = None
+
+    def __enter__(
+        self,
+    ) -> zipfile.ZipFile:
+        self._archive = zipfile.ZipFile(
+            self._buffer,
+            "r",
+        )
+        return self._archive
+
+    def __exit__(
+        self,
+        exc_type,
+        exc_value,
+        traceback,
+    ):
+        if self._archive is not None:
+            self._archive.close()
+
+        self._buffer.close()
+
+        return False
+
+
 def load_month_contract_from_release(
     release_dir: str | Path,
     year: int,
@@ -137,12 +259,30 @@ def load_month_contract_from_release(
     strike: float,
 ) -> List[OptionRow]:
     """
-    Load a monthly option contract from all release
-    assets belonging to the requested year.
+    Load a monthly option contract from release data.
+
+    Supported release layouts:
+
+    1. Direct monthly assets:
+
+       release-data/November.2017.zip
+
+    2. A yearly ZIP containing monthly ZIPs:
+
+       NiftyOptions 2017.zip
+           November 2017.zip
+
+    3. Split yearly ZIP assets.
     """
 
+    normalised_monthly_name = (
+        _normalise_monthly_zip_name(
+            monthly_zip_name
+        )
+    )
+
     monthly_expiry = parse_monthly_zip_filename(
-        monthly_zip_name
+        normalised_monthly_name
     )
 
     if monthly_expiry is None:
@@ -151,29 +291,70 @@ def load_month_contract_from_release(
             f"{monthly_zip_name}"
         )
 
+    release_dir = Path(release_dir)
+
+    # ---------------------------------------------------------
+    # CURRENT RELEASE LAYOUT:
+    # Each monthly ZIP is itself a release asset.
+    # ---------------------------------------------------------
+    direct_asset = _find_direct_monthly_asset(
+        release_dir=release_dir,
+        monthly_zip_name=monthly_zip_name,
+        year=year,
+    )
+
+    if direct_asset is not None:
+        with zipfile.ZipFile(
+            direct_asset,
+            "r",
+        ) as archive:
+            rows = load_month_zip_bytes(
+                direct_asset.read_bytes(),
+                monthly_expiry,
+            )
+
+        contract_rows = filter_contract(
+            rows,
+            option_type,
+            strike,
+            monthly_expiry,
+        )
+
+        if not contract_rows:
+            raise ValueError(
+                "Option contract not found: "
+                f"{option_type.upper()} "
+                f"{float(strike):g} "
+                f"expiry {monthly_expiry} "
+                f"in {direct_asset.name}"
+            )
+
+        return sorted(
+            contract_rows,
+            key=lambda row: row["timestamp"],
+        )
+
+    # ---------------------------------------------------------
+    # LEGACY YEARLY/SPLIT RELEASE LAYOUT
+    # ---------------------------------------------------------
     archive_bytes = _load_year_archive_bytes(
         release_dir,
         year,
     )
 
-    with zipfile.ZipFile(
-        Path(
-            release_dir
-        ) / "__merged_release__.zip",
-        "w",
-    ) if False else _temporary_zip(
+    with _temporary_zip(
         archive_bytes
     ) as archive:
 
-        member_name = _find_member_case_insensitive(
+        member_name = _find_monthly_member(
             archive,
-            monthly_zip_name,
+            normalised_monthly_name,
         )
 
         if member_name is None:
             raise FileNotFoundError(
-                f"Monthly ZIP not found: "
-                f"{monthly_zip_name}"
+                "Monthly ZIP not found in release "
+                f"assets: {monthly_zip_name}"
             )
 
         monthly_bytes = archive.read(
@@ -204,43 +385,6 @@ def load_month_contract_from_release(
         contract_rows,
         key=lambda row: row["timestamp"],
     )
-
-
-class _temporary_zip:
-    """
-    In-memory ZipFile context manager.
-    """
-
-    def __init__(
-        self,
-        data: bytes,
-    ):
-        import io
-
-        self._buffer = io.BytesIO(data)
-        self._archive: zipfile.ZipFile | None = None
-
-    def __enter__(
-        self,
-    ) -> zipfile.ZipFile:
-        self._archive = zipfile.ZipFile(
-            self._buffer,
-            "r",
-        )
-        return self._archive
-
-    def __exit__(
-        self,
-        exc_type,
-        exc_value,
-        traceback,
-    ):
-        if self._archive is not None:
-            self._archive.close()
-
-        self._buffer.close()
-
-        return False
 
 
 def get_entry_quote(
@@ -333,7 +477,9 @@ def load_btst_contract(
         "option_type": option_type.upper(),
         "strike": float(strike),
         "expiry": parse_monthly_zip_filename(
-            monthly_zip_name
+            _normalise_monthly_zip_name(
+                monthly_zip_name
+            )
         ),
         "entry": entry,
         "exit": exit_,
@@ -392,7 +538,9 @@ def load_btst_contract_from_release(
         "option_type": option_type.upper(),
         "strike": float(strike),
         "expiry": parse_monthly_zip_filename(
-            monthly_zip_name
+            _normalise_monthly_zip_name(
+                monthly_zip_name
+            )
         ),
         "entry": entry,
         "exit": exit_,
