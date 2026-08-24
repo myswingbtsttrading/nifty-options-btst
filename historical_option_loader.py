@@ -1,4 +1,3 @@
-```python
 from __future__ import annotations
 
 import io
@@ -17,8 +16,7 @@ OPTION_FILENAME_PATTERN = re.compile(
 MONTHLY_ZIP_PATTERN = re.compile(
     r"^(January|February|March|April|May|June|July|August|"
     r"September|October|November|December)"
-    r"[ ._-]+"
-    r"(\d{4})\.zip$",
+    r"[ ._-]+(\d{4})\.zip$",
     re.IGNORECASE,
 )
 
@@ -390,4 +388,3 @@ def filter_contract(
             or row.get("expiry") == expiry
         )
     ]
-```
