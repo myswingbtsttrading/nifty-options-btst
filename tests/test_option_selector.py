@@ -3,196 +3,183 @@ from datetime import date
 import pytest
 
 from option_selector import (
-    OptionContract,
-    round_to_strike,
+    OptionSelectionError,
     select_atm_contract,
-    select_contract,
-    select_itm_contract,
-    select_otm_contract,
+    select_atm_strike,
+    select_live_contract,
 )
 
 
-EXPIRY = date(2026, 8, 27)
+EXPIRY = date(
+    2026,
+    8,
+    27,
+)
 
 
-def test_rounds_to_nearest_50():
-    assert round_to_strike(25023) == 25000
-    assert round_to_strike(25026) == 25050
+def _payload():
+    return {
+        "records": {
+            "data": [
+                {
+                    "strikePrice": 25000,
+                    "expiryDate": "27-Aug-2026",
+                    "CE": {
+                        "lastPrice": 105,
+                    },
+                    "PE": {
+                        "lastPrice": 95,
+                    },
+                },
+                {
+                    "strikePrice": 25050,
+                    "expiryDate": "27-Aug-2026",
+                    "CE": {
+                        "lastPrice": 85,
+                    },
+                    "PE": {
+                        "lastPrice": 125,
+                    },
+                },
+                {
+                    "strikePrice": 24950,
+                    "expiryDate": "27-Aug-2026",
+                    "CE": {
+                        "lastPrice": 120,
+                    },
+                    "PE": {
+                        "lastPrice": 80,
+                    },
+                },
+            ],
+        }
+    }
 
 
-def test_atm_call():
-    contract = select_atm_contract(
-        nifty_price=25023,
+def test_select_atm_strike():
+    assert select_atm_strike(
+        25020,
+        50,
+    ) == 25000
+
+
+def test_select_atm_strike_rounds_up():
+    assert select_atm_strike(
+        25030,
+        50,
+    ) == 25050
+
+
+def test_select_atm_strike_rejects_invalid_price():
+    with pytest.raises(
+        OptionSelectionError,
+        match="positive",
+    ):
+        select_atm_strike(
+            0,
+            50,
+        )
+
+
+def test_select_atm_contract_ce():
+    result = select_atm_contract(
+        nifty_price=25020,
         expiry=EXPIRY,
         option_type="CE",
     )
 
-    assert contract.strike == 25000
-    assert contract.option_type == "CE"
-    assert contract.expiry == EXPIRY
-    assert contract.selection_mode == "ATM"
+    assert result.expiry == EXPIRY
+    assert result.strike == 25000
+    assert result.option_type == "CE"
 
 
-def test_atm_put():
-    contract = select_atm_contract(
-        nifty_price=25026,
+def test_select_atm_contract_pe():
+    result = select_atm_contract(
+        nifty_price=25020,
         expiry=EXPIRY,
         option_type="PE",
     )
 
-    assert contract.strike == 25050
-    assert contract.option_type == "PE"
-    assert contract.selection_mode == "ATM"
+    assert result.strike == 25000
+    assert result.option_type == "PE"
 
 
-def test_one_step_itm_call():
-    contract = select_itm_contract(
-        nifty_price=25023,
-        expiry=EXPIRY,
-        option_type="CE",
-    )
-
-    assert contract.strike == 24950
-    assert contract.option_type == "CE"
-    assert contract.selection_mode == "ITM"
-
-
-def test_one_step_itm_put():
-    contract = select_itm_contract(
-        nifty_price=25023,
-        expiry=EXPIRY,
-        option_type="PE",
-    )
-
-    assert contract.strike == 25050
-    assert contract.option_type == "PE"
-    assert contract.selection_mode == "ITM"
-
-
-def test_one_step_otm_call():
-    contract = select_otm_contract(
-        nifty_price=25023,
-        expiry=EXPIRY,
-        option_type="CE",
-    )
-
-    assert contract.strike == 25050
-    assert contract.option_type == "CE"
-    assert contract.selection_mode == "OTM"
-
-
-def test_one_step_otm_put():
-    contract = select_otm_contract(
-        nifty_price=25023,
-        expiry=EXPIRY,
-        option_type="PE",
-    )
-
-    assert contract.strike == 24950
-    assert contract.option_type == "PE"
-    assert contract.selection_mode == "OTM"
-
-
-def test_generic_atm_selection():
-    contract = select_contract(
-        nifty_price=25023,
-        expiry=EXPIRY,
-        option_type="CE",
-        selection_mode="ATM",
-    )
-
-    assert isinstance(contract, OptionContract)
-    assert contract.strike == 25000
-
-
-def test_generic_itm_selection():
-    contract = select_contract(
-        nifty_price=25023,
-        expiry=EXPIRY,
-        option_type="CE",
-        selection_mode="ITM",
-    )
-
-    assert contract.strike == 24950
-
-
-def test_generic_otm_selection():
-    contract = select_contract(
-        nifty_price=25023,
-        expiry=EXPIRY,
-        option_type="CE",
-        selection_mode="OTM",
-    )
-
-    assert contract.strike == 25050
-
-
-def test_selection_is_case_insensitive():
-    contract = select_contract(
-        nifty_price=25023,
-        expiry=EXPIRY,
-        option_type="ce",
-        selection_mode="itm",
-    )
-
-    assert contract.option_type == "CE"
-    assert contract.selection_mode == "ITM"
-    assert contract.strike == 24950
-
-
-def test_contract_symbol_suffix():
-    contract = select_itm_contract(
-        nifty_price=25023,
-        expiry=EXPIRY,
-        option_type="CE",
-    )
-
-    assert contract.symbol_suffix == "24950CE"
-
-
-def test_invalid_option_type():
-    with pytest.raises(ValueError):
-        select_contract(
-            nifty_price=25000,
+def test_select_atm_contract_rejects_invalid_type():
+    with pytest.raises(
+        OptionSelectionError,
+        match="CE or PE",
+    ):
+        select_atm_contract(
+            nifty_price=25020,
             expiry=EXPIRY,
             option_type="XX",
         )
 
 
-def test_invalid_selection_mode():
-    with pytest.raises(ValueError):
-        select_contract(
-            nifty_price=25000,
-            expiry=EXPIRY,
-            option_type="CE",
-            selection_mode="INVALID",
-        )
-
-
-def test_invalid_price():
-    with pytest.raises(ValueError):
-        round_to_strike(0)
-
-
-def test_negative_price():
-    with pytest.raises(ValueError):
-        round_to_strike(-100)
-
-
-def test_invalid_expiry():
-    with pytest.raises(ValueError):
-        select_contract(
-            nifty_price=25000,
-            expiry="2026-08-27",
-            option_type="CE",
-        )
-
-
-def test_zero_strike_interval_is_rejected(monkeypatch):
-    monkeypatch.setattr(
-        "option_selector.STRIKE_INTERVAL",
-        0,
+def test_select_live_contract_ce():
+    result = select_live_contract(
+        option_chain_payload=_payload(),
+        nifty_price=25020,
+        expiry=EXPIRY,
+        option_type="CE",
     )
 
-    with pytest.raises(ValueError):
-        round_to_strike(25000)
+    assert result.strike == 25000
+    assert result.option_type == "CE"
+    assert result.expiry == EXPIRY
+
+
+def test_select_live_contract_pe():
+    result = select_live_contract(
+        option_chain_payload=_payload(),
+        nifty_price=25020,
+        expiry=EXPIRY,
+        option_type="PE",
+    )
+
+    assert result.strike == 25000
+    assert result.option_type == "PE"
+
+
+def test_select_live_contract_requires_real_contract():
+    payload = {
+        "records": {
+            "data": [
+                {
+                    "strikePrice": 25000,
+                    "expiryDate": "27-Aug-2026",
+                    "CE": {
+                        "lastPrice": 0,
+                    },
+                }
+            ]
+        }
+    }
+
+    with pytest.raises(
+        OptionSelectionError,
+        match="not available",
+    ):
+        select_live_contract(
+            option_chain_payload=payload,
+            nifty_price=25020,
+            expiry=EXPIRY,
+            option_type="CE",
+        )
+
+
+def test_select_live_contract_requires_matching_expiry():
+    with pytest.raises(
+        OptionSelectionError,
+        match="not available",
+    ):
+        select_live_contract(
+            option_chain_payload=_payload(),
+            nifty_price=25020,
+            expiry=date(
+                2026,
+                9,
+                3,
+            ),
+            option_type="CE",
+        )
