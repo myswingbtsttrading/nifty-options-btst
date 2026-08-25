@@ -43,14 +43,14 @@ def test_default_trade_plan():
     assert plan.risk_budget == 1000.0
     assert plan.max_allocation == 20000.0
 
-    # Risk allows:
-    # 1000 / (30 × 65) = 0.51 lots -> 0 lots.
+    # Risk allows less than one lot:
+    # 1000 / (30 × 65) = 0.51 lots.
     assert plan.lots == 0
     assert plan.quantity == 0
     assert plan.is_tradeable is False
 
 
-def test_trade_plan_with_larger_risk_budget():
+def test_larger_risk_budget_still_respects_allocation_limit():
     config = RiskConfig(
         stop_loss_pct=0.15,
         target_pct=0.30,
@@ -66,14 +66,21 @@ def test_trade_plan_with_larger_risk_budget():
     )
 
     # Risk budget = ₹5,000.
-    # Risk per lot = 30 × 65 = ₹1,950.
-    # 2 lots fit the risk budget.
-    assert plan.lots == 2
-    assert plan.quantity == 130
+    #
+    # Risk per lot = ₹30 × 65 = ₹1,950.
+    # Risk alone would allow 2 lots.
+    #
+    # But maximum allocation = ₹20,000.
+    # One lot requires ₹13,000.
+    # Two lots require ₹26,000.
+    #
+    # Therefore allocation limits the trade to 1 lot.
+    assert plan.lots == 1
+    assert plan.quantity == 65
 
-    assert plan.capital_required == 26000.0
-    assert plan.planned_risk == 3900.0
-    assert plan.planned_reward == 7800.0
+    assert plan.capital_required == 13000.0
+    assert plan.planned_risk == 1950.0
+    assert plan.planned_reward == 3900.0
 
     assert plan.is_tradeable is True
 
@@ -141,7 +148,7 @@ def test_trade_plan_can_have_zero_lots():
         config=config,
     )
 
-    # Risk per lot = 100 × 65 = ₹6,500.
+    # Risk per lot = ₹100 × 65 = ₹6,500.
     # Risk budget = ₹1,000.
     assert plan.lots == 0
     assert plan.quantity == 0
