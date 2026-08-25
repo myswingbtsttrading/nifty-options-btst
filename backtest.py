@@ -1,7 +1,6 @@
-from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
-from math import floor
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from backtest_config import (
     BacktestConfig,
@@ -10,18 +9,33 @@ from backtest_config import (
 from historical_dataset import next_trading_date
 from option_selector import round_to_strike
 from option_strategy import generate_signal
+from risk_manager import (
+    RiskConfig,
+    calculate_trade_plan,
+)
 
 
 @dataclass
 class BacktestTrade:
     entry_time: datetime
     exit_time: datetime
-
     direction: str
     strike: float
     expiry: str
+
     entry_price: float
     exit_price: float
+
+    stop_loss: float
+    target: float
+
+    lot_size: int
+    lots: int
+    quantity: int
+
+    capital_required: float
+    planned_risk: float
+    planned_reward: float
 
     gross_pnl: float
     costs: float
@@ -30,6 +44,7 @@ class BacktestTrade:
     return_pct: float
     confidence: float
 
+    risk_reward_ratio: float
     reason: str
 
 
@@ -41,6 +56,8 @@ class BacktestResult:
     total_trades: int
     winning_trades: int
     losing_trades: int
+
+    skipped_risk_trades: int
 
     win_rate: float
     total_return_pct: float
@@ -229,8 +246,9 @@ def _calculate_trade(
     direction: str,
     confidence: float,
     reason: str,
+    capital: float,
     config: BacktestConfig,
-) -> BacktestTrade:
+) -> Optional[BacktestTrade]:
     raw_entry = float(
         entry_quote["close"]
     )
@@ -249,21 +267,40 @@ def _calculate_trade(
         config,
     )
 
+    risk_config = RiskConfig(
+        stop_loss_pct=config.stop_loss_pct,
+        target_pct=config.target_pct,
+        risk_per_trade_pct=config.risk_per_trade_pct,
+        max_allocation_pct=config.max_allocation_pct,
+    )
+
+    plan = calculate_trade_plan(
+        entry_price=entry_price,
+        capital=capital,
+        lot_size=config.lot_size,
+        config=risk_config,
+    )
+
+    if not plan.is_tradeable:
+        return None
+
     gross_pnl = (
         exit_price - entry_price
-    )
+    ) * plan.quantity
 
     costs = (
         entry_price + exit_price
-    ) * config.brokerage_and_cost_pct
+    ) * config.brokerage_and_cost_pct * plan.quantity
 
     net_pnl = (
         gross_pnl - costs
     )
 
     return_pct = (
-        net_pnl / entry_price
-    ) * 100
+        net_pnl
+        / plan.capital_required
+        * 100
+    )
 
     return BacktestTrade(
         entry_time=entry_quote["timestamp"],
@@ -273,11 +310,20 @@ def _calculate_trade(
         expiry=entry_quote["expiry"],
         entry_price=entry_price,
         exit_price=exit_price,
+        stop_loss=plan.stop_loss,
+        target=plan.target,
+        lot_size=plan.lot_size,
+        lots=plan.lots,
+        quantity=plan.quantity,
+        capital_required=plan.capital_required,
+        planned_risk=plan.planned_risk,
+        planned_reward=plan.planned_reward,
         gross_pnl=gross_pnl,
         costs=costs,
         net_pnl=net_pnl,
         return_pct=return_pct,
         confidence=confidence,
+        risk_reward_ratio=plan.risk_reward_ratio,
         reason=reason,
     )
 
@@ -381,6 +427,12 @@ def run_backtest(
 
     prices: List[float] = []
 
+    current_capital = (
+        config.initial_capital
+    )
+
+    skipped_risk_trades = 0
+
     for index, row in enumerate(
         underlying_rows
     ):
@@ -483,21 +535,28 @@ def run_backtest(
             continue
 
         trade = _calculate_trade(
-            entry_quote,
-            exit_quote,
-            signal.direction,
-            signal.confidence,
-            signal.reason,
-            config,
+            entry_quote=entry_quote,
+            exit_quote=exit_quote,
+            direction=signal.direction,
+            confidence=signal.confidence,
+            reason=signal.reason,
+            capital=current_capital,
+            config=config,
         )
 
+        if trade is None:
+            skipped_risk_trades += 1
+            continue
+
         trades.append(trade)
+
+        current_capital += trade.net_pnl
 
     initial_capital = (
         config.initial_capital
     )
 
-    final_capital = initial_capital
+    final_capital = current_capital
 
     equity_curve = [
         initial_capital
@@ -505,14 +564,14 @@ def run_backtest(
 
     gross_profit = 0.0
     gross_loss = 0.0
+
     winning_trades = 0
     losing_trades = 0
 
     for trade in trades:
-        final_capital += trade.net_pnl
-
         equity_curve.append(
-            final_capital
+            equity_curve[-1]
+            + trade.net_pnl
         )
 
         if trade.net_pnl > 0:
@@ -546,7 +605,8 @@ def run_backtest(
 
     if gross_loss > 0:
         profit_factor = (
-            gross_profit / gross_loss
+            gross_profit
+            / gross_loss
         )
     elif gross_profit > 0:
         profit_factor = float("inf")
@@ -559,6 +619,7 @@ def run_backtest(
         total_trades=total_trades,
         winning_trades=winning_trades,
         losing_trades=losing_trades,
+        skipped_risk_trades=skipped_risk_trades,
         win_rate=win_rate,
         total_return_pct=total_return_pct,
         gross_profit=gross_profit,
@@ -590,6 +651,8 @@ def format_backtest_report(
         f"Trades: {result.total_trades}\n"
         f"Wins: {result.winning_trades}\n"
         f"Losses: {result.losing_trades}\n"
+        f"Risk-filtered trades: "
+        f"{result.skipped_risk_trades}\n"
         f"Win rate: {result.win_rate:.2f}%\n"
         f"Return: {result.total_return_pct:.2f}%\n"
         f"Profit factor: {profit_factor}\n"
