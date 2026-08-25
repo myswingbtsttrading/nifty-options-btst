@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Mapping
 
 
 class OptionSelectionError(ValueError):
-    """Raised when a suitable NIFTY option contract cannot be selected."""
+    """Raised when a suitable option contract cannot be selected."""
 
 
 @dataclass(frozen=True)
@@ -16,9 +16,7 @@ class OptionContract:
     option_type: str
 
 
-def _validate_option_type(
-    option_type: str,
-) -> str:
+def _validate_option_type(option_type: str) -> str:
     normalized = str(option_type).strip().upper()
 
     if normalized not in {"CE", "PE"}:
@@ -29,9 +27,7 @@ def _validate_option_type(
     return normalized
 
 
-def _validate_strike_interval(
-    strike_interval: int,
-) -> int:
+def _validate_strike_interval(strike_interval: int) -> int:
     if strike_interval <= 0:
         raise OptionSelectionError(
             "strike_interval must be positive."
@@ -40,10 +36,11 @@ def _validate_strike_interval(
     return int(strike_interval)
 
 
-def select_atm_strike(
+def round_to_strike(
     nifty_price: float,
     strike_interval: int = 50,
 ) -> int:
+    """Backward-compatible strike rounding used by the backtester."""
     if nifty_price <= 0:
         raise OptionSelectionError(
             "nifty_price must be positive."
@@ -55,8 +52,18 @@ def select_atm_strike(
 
     return int(
         round(
-            nifty_price / interval
+            float(nifty_price) / interval
         ) * interval
+    )
+
+
+def select_atm_strike(
+    nifty_price: float,
+    strike_interval: int = 50,
+) -> int:
+    return round_to_strike(
+        nifty_price=nifty_price,
+        strike_interval=strike_interval,
     )
 
 
@@ -87,10 +94,34 @@ def select_atm_contract(
     )
 
 
+def select_contract(
+    nifty_price: float,
+    expiry: date,
+    option_type: str,
+    strike_interval: int = 50,
+) -> OptionContract:
+    """
+    Backward-compatible contract selector.
+
+    Existing backtest and BTST runner code can continue using
+    select_contract() while the live scanner uses the stricter
+    select_live_contract().
+    """
+    return select_atm_contract(
+        nifty_price=nifty_price,
+        expiry=expiry,
+        option_type=option_type,
+        strike_interval=strike_interval,
+    )
+
+
 def _row_expiry(
     row: Mapping[str, Any],
 ) -> date | None:
     value = row.get("expiryDate")
+
+    if isinstance(value, datetime):
+        return value.date()
 
     if isinstance(value, date):
         return value
@@ -100,10 +131,9 @@ def _row_expiry(
 
     text = str(value).strip()
 
-    from datetime import datetime
-
     for fmt in (
         "%d-%b-%Y",
+        "%d-%B-%Y",
         "%d-%m-%Y",
         "%Y-%m-%d",
     ):
@@ -176,36 +206,39 @@ def _available_contracts(
         for option_type in ("CE", "PE"):
             leg = row.get(option_type)
 
-            if isinstance(
+            if not isinstance(
                 leg,
                 Mapping,
             ):
-                last_price = (
-                    leg.get("lastPrice")
-                    or leg.get("close")
+                continue
+
+            last_price = (
+                leg.get("lastPrice")
+                if leg.get("lastPrice") is not None
+                else leg.get("close")
+            )
+
+            if last_price is None:
+                continue
+
+            try:
+                price = float(last_price)
+            except (
+                TypeError,
+                ValueError,
+            ):
+                continue
+
+            if price <= 0:
+                continue
+
+            contracts.append(
+                OptionContract(
+                    expiry=expiry,
+                    strike=strike,
+                    option_type=option_type,
                 )
-
-                if last_price is None:
-                    continue
-
-                try:
-                    price = float(last_price)
-                except (
-                    TypeError,
-                    ValueError,
-                ):
-                    continue
-
-                if price <= 0:
-                    continue
-
-                contracts.append(
-                    OptionContract(
-                        expiry=expiry,
-                        strike=strike,
-                        option_type=option_type,
-                    )
-                )
+            )
 
     return contracts
 
@@ -218,10 +251,9 @@ def select_live_contract(
     strike_interval: int = 50,
 ) -> OptionContract:
     """
-    Select the ATM contract only if it is actually present
-    and has a valid live price in the supplied NSE chain.
+    Select the ATM contract only when that exact contract exists
+    in the live option-chain payload and has a valid price.
     """
-
     candidate = select_atm_contract(
         nifty_price=nifty_price,
         expiry=expiry,
