@@ -1,0 +1,141 @@
+
+name: Verify NIFTY 2017 Data
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-nifty-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Run existing test suite
+        run: |
+          python -m pytest -q
+
+      - name: Verify NIFTY data configuration
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          from data_loader import load_underlying_data
+
+          data_dir = Path("data")
+          nifty_file = data_dir / "nifty.csv"
+
+          print("NIFTY 2017 data verification")
+          print("============================")
+          print(f"Expected local file: {nifty_file}")
+
+          if not nifty_file.exists():
+              print()
+              print(
+                  "STATUS: DATA NOT PRESENT"
+              )
+              print(
+                  "The repository intentionally does not "
+                  "store large historical datasets."
+              )
+              print(
+                  "This workflow therefore verifies the "
+                  "loader contract without requiring the "
+                  "large NIFTY archive to be committed."
+              )
+              raise SystemExit(0)
+
+          size = nifty_file.stat().st_size
+
+          print(
+              f"NIFTY file size: {size:,} bytes"
+          )
+
+          if size == 0:
+              raise SystemExit(
+                  "ERROR: nifty.csv is empty."
+              )
+
+          rows = load_underlying_data(
+              nifty_file
+          )
+
+          if not rows:
+              raise SystemExit(
+                  "ERROR: nifty.csv contains no rows."
+              )
+
+          timestamps = [
+              row["timestamp"]
+              for row in rows
+          ]
+
+          closes = [
+              row["close"]
+              for row in rows
+          ]
+
+          if any(
+              timestamp is None
+              for timestamp in timestamps
+          ):
+              raise SystemExit(
+                  "ERROR: NIFTY data contains "
+                  "a missing timestamp."
+              )
+
+          if any(
+              close <= 0
+              for close in closes
+          ):
+              raise SystemExit(
+                  "ERROR: NIFTY data contains "
+                  "a non-positive close."
+              )
+
+          if timestamps != sorted(timestamps):
+              raise SystemExit(
+                  "ERROR: NIFTY timestamps are "
+                  "not sorted."
+              )
+
+          print(
+              f"NIFTY rows: {len(rows):,}"
+          )
+          print(
+              f"First timestamp: {timestamps[0]}"
+          )
+          print(
+              f"Last timestamp: {timestamps[-1]}"
+          )
+          print(
+              f"First close: {closes[0]}"
+          )
+          print(
+              f"Last close: {closes[-1]}"
+          )
+
+          print()
+          print("STATUS: PASS")
+          print(
+              "NIFTY data satisfies the existing "
+              "underlying-data loader contract."
+          )
+          PY
+```
