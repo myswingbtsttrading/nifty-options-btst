@@ -100,6 +100,37 @@ def test_build_buy_signal():
     )
 
 
+def test_build_buy_signal_with_default_risk():
+    result = build_btst_signal(
+        signal_input=_input(),
+        capital=100000.0,
+        lot_size=65,
+    )
+
+    assert result.decision == "BUY"
+    assert result.entry_price == 100.0
+
+    # Default risk:
+    # stop = 15% -> ₹85
+    # target = 30% -> ₹130
+    assert result.stop_loss == 85.0
+    assert result.target == 130.0
+
+    # Risk per option = ₹15.
+    # Risk per lot = ₹15 × 65 = ₹975.
+    # Risk budget = ₹1,000.
+    #
+    # Therefore only 1 complete lot fits.
+    assert result.lots == 1
+    assert result.quantity == 65
+
+    assert result.capital_required == 6500.0
+    assert result.planned_risk == 975.0
+    assert result.planned_reward == 1950.0
+
+    assert result.risk_reward_ratio == 2.0
+
+
 def test_buy_signal_below_confidence_becomes_wait():
     result = build_btst_signal(
         signal_input=_input(
@@ -240,8 +271,35 @@ def test_signal_to_dict():
     assert data["entry_price"] == 100.0
     assert data["stop_loss"] == 85.0
     assert data["target"] == 130.0
+
+    # Default risk settings allow only one complete lot:
+    # ₹1,000 risk budget / ₹975 risk per lot = 1 lot.
+    assert data["lots"] == 1
+    assert data["quantity"] == 65
+
+    assert data["capital_required"] == 6500.0
+    assert data["planned_risk"] == 975.0
+    assert data["planned_reward"] == 1950.0
+
+
+def test_signal_to_dict_custom_risk_settings():
+    result = build_btst_signal(
+        signal_input=_input(),
+        capital=100000.0,
+        lot_size=65,
+        stop_loss_pct=0.10,
+        target_pct=0.20,
+        risk_per_trade_pct=0.02,
+        max_allocation_pct=0.20,
+    )
+
+    data = result.to_dict()
+
     assert data["lots"] == 3
     assert data["quantity"] == 195
+    assert data["capital_required"] == 19500.0
+    assert data["planned_risk"] == 1950.0
+    assert data["planned_reward"] == 3900.0
 
 
 def test_invalid_nifty_price():
