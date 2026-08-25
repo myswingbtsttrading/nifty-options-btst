@@ -1,9 +1,14 @@
+from __future__ import annotations
+
 import requests
 
 from config import (
     TELEGRAM_CHAT_ID,
     TELEGRAM_TOKEN,
 )
+
+
+TELEGRAM_API_TIMEOUT = 30
 
 
 def send_alert(message: str) -> None:
@@ -29,7 +34,7 @@ def send_alert(message: str) -> None:
             "chat_id": TELEGRAM_CHAT_ID,
             "text": message,
         },
-        timeout=30,
+        timeout=TELEGRAM_API_TIMEOUT,
     )
 
     response.raise_for_status()
@@ -43,3 +48,9 @@ def send_alert(message: str) -> None:
                 "Telegram request failed.",
             )
         )
+
+
+def send_test_alert() -> None:
+    send_alert(
+        "✅ NIFTY BTST Telegram connection is working."
+    )
