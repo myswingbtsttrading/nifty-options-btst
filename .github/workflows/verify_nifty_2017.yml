@@ -57,7 +57,7 @@ jobs:
           )
 
           for asset in "${MONTHLY_ASSETS[@]}"; do
-            echo "Downloading: ${asset}"
+            echo "Downloading ${asset}"
 
             gh release download "${RELEASE_TAG}" \
               --repo "${RELEASE_REPO}" \
@@ -94,16 +94,15 @@ jobs:
               "December.2017.zip",
           ]
 
-          print("NIFTY 2017 monthly release verification")
-          print("========================================")
-
           actual = sorted(
               path.name
               for path in release_dir.glob("*.zip")
           )
 
-          print()
-          print(f"ZIP files downloaded: {len(actual)}")
+          if len(actual) != 12:
+              raise SystemExit(
+                  f"Expected 12 ZIP files, found {len(actual)}"
+              )
 
           missing = [
               name
@@ -111,74 +110,38 @@ jobs:
               if not (release_dir / name).exists()
           ]
 
-          unexpected = [
-              name
-              for name in actual
-              if name not in expected
-          ]
-
           if missing:
-              print()
-              print("Missing files:")
-              for name in missing:
-                  print(f"- {name}")
-
               raise SystemExit(
-                  "ERROR: One or more required monthly "
-                  "release assets are missing."
+                  "Missing release assets: "
+                  + ", ".join(missing)
               )
-
-          if unexpected:
-              print()
-              print("Unexpected ZIP files:")
-              for name in unexpected:
-                  print(f"- {name}")
-
-          if len(actual) != 12:
-              raise SystemExit(
-                  f"ERROR: Expected exactly 12 monthly ZIP files, "
-                  f"found {len(actual)}."
-              )
-
-          print()
 
           for name in expected:
               path = release_dir / name
-              size = path.stat().st_size
 
-              print(
-                  f"{name}: "
-                  f"{size:,} bytes"
-              )
-
-              if size <= 0:
+              if path.stat().st_size <= 0:
                   raise SystemExit(
-                      f"ERROR: Empty release asset: {name}"
+                      f"Empty release asset: {name}"
                   )
 
-              try:
-                  with ZipFile(path) as archive:
-                      bad_file = archive.testzip()
-                      entries = len(archive.namelist())
-              except Exception as exc:
-                  raise SystemExit(
-                      f"ERROR: Invalid ZIP {name}: {exc}"
-                  ) from exc
+              with ZipFile(path) as archive:
+                  bad_file = archive.testzip()
 
-              if bad_file is not None:
-                  raise SystemExit(
-                      f"ERROR: Corrupt ZIP {name}: "
-                      f"{bad_file}"
+                  if bad_file is not None:
+                      raise SystemExit(
+                          f"Corrupt ZIP {name}: {bad_file}"
+                      )
+
+                  print(
+                      f"{name}: "
+                      f"{path.stat().st_size:,} bytes | "
+                      f"{len(archive.namelist())} entries | "
+                      f"ZIP OK"
                   )
-
-              print(
-                  f"  ZIP OK: {entries} entries"
-              )
 
           print()
           print("STATUS: PASS")
-          print("All 12 monthly 2017 release assets are")
-          print("present and valid ZIP archives.")
+          print("All 12 monthly 2017 release assets are valid.")
           PY
 
       - name: Run real release BTST probe
@@ -209,3 +172,47 @@ jobs:
           print(f"Exit: {result['exit']}")
           print("STATUS: PASS")
           PY
+
+      - name: Run 2017 historical BTST baseline
+        run: |
+          set -euo pipefail
+
+          mkdir -p artifacts
+
+          python - <<'PY'
+          from btst_historical_backtest import (
+              run_2017_btst_baseline,
+              write_json_report,
+              print_summary,
+          )
+
+          result = run_2017_btst_baseline(
+              "release-data"
+          )
+
+          write_json_report(
+              result,
+              "artifacts/btst_2017_baseline.json",
+          )
+
+          print_summary(result)
+
+          if result["total_trades"] <= 0:
+              raise SystemExit(
+                  "ERROR: Historical BTST baseline "
+                  "produced zero trades."
+              )
+
+          print()
+          print("STATUS: PASS")
+          print(
+              "2017 historical BTST baseline completed."
+          )
+          PY
+
+      - name: Upload 2017 baseline report
+        uses: actions/upload-artifact@v4
+        with:
+          name: btst-2017-baseline
+          path: artifacts/btst_2017_baseline.json
+          if-no-files-found: error
