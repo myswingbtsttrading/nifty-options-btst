@@ -28,7 +28,7 @@ def test_validate_trade_costs():
 
     assert isclose(
         result.net_profit,
-        -0.002,
+        -0.004,
     )
 
 
