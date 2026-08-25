@@ -1,0 +1,211 @@
+name: Verify NIFTY 2017
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-nifty-2017:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          fi
+
+      - name: Run test suite
+        run: |
+          python -m pytest -q
+
+      - name: Download all 12 monthly 2017 release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p release-data
+
+          RELEASE_TAG="data-2017-v1"
+          RELEASE_REPO="myswingbtsttrading/nifty-options-btst"
+
+          MONTHLY_ASSETS=(
+            "January.2017.zip"
+            "February.2017.zip"
+            "March.2017.zip"
+            "April.2017.zip"
+            "May.2017.zip"
+            "June.2017.zip"
+            "July.2017.zip"
+            "August.2017.zip"
+            "September.2017.zip"
+            "October.2017.zip"
+            "November.2017.zip"
+            "December.2017.zip"
+          )
+
+          for asset in "${MONTHLY_ASSETS[@]}"; do
+            echo "Downloading: ${asset}"
+
+            gh release download "${RELEASE_TAG}" \
+              --repo "${RELEASE_REPO}" \
+              --pattern "${asset}" \
+              --dir release-data
+          done
+
+          echo
+          echo "Downloaded release assets:"
+          ls -lh release-data
+
+      - name: Verify all 12 monthly ZIP files
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          release_dir = Path("release-data")
+
+          expected = [
+              "January.2017.zip",
+              "February.2017.zip",
+              "March.2017.zip",
+              "April.2017.zip",
+              "May.2017.zip",
+              "June.2017.zip",
+              "July.2017.zip",
+              "August.2017.zip",
+              "September.2017.zip",
+              "October.2017.zip",
+              "November.2017.zip",
+              "December.2017.zip",
+          ]
+
+          print("NIFTY 2017 monthly release verification")
+          print("========================================")
+
+          actual = sorted(
+              path.name
+              for path in release_dir.glob("*.zip")
+          )
+
+          print()
+          print(f"ZIP files downloaded: {len(actual)}")
+
+          missing = [
+              name
+              for name in expected
+              if not (release_dir / name).exists()
+          ]
+
+          unexpected = [
+              name
+              for name in actual
+              if name not in expected
+          ]
+
+          if missing:
+              print()
+              print("Missing files:")
+              for name in missing:
+                  print(f"- {name}")
+
+              raise SystemExit(
+                  "ERROR: One or more required monthly "
+                  "release assets are missing."
+              )
+
+          if unexpected:
+              print()
+              print("Unexpected ZIP files:")
+              for name in unexpected:
+                  print(f"- {name}")
+
+          if len(actual) != 12:
+              raise SystemExit(
+                  f"ERROR: Expected exactly 12 monthly ZIP files, "
+                  f"found {len(actual)}."
+              )
+
+          print()
+
+          for name in expected:
+              path = release_dir / name
+              size = path.stat().st_size
+
+              print(
+                  f"{name}: "
+                  f"{size:,} bytes"
+              )
+
+              if size <= 0:
+                  raise SystemExit(
+                      f"ERROR: Empty release asset: {name}"
+                  )
+
+              try:
+                  with ZipFile(path) as archive:
+                      bad_file = archive.testzip()
+                      entries = len(archive.namelist())
+              except Exception as exc:
+                  raise SystemExit(
+                      f"ERROR: Invalid ZIP {name}: {exc}"
+                  ) from exc
+
+              if bad_file is not None:
+                  raise SystemExit(
+                      f"ERROR: Corrupt ZIP {name}: "
+                      f"{bad_file}"
+                  )
+
+              print(
+                  f"  ZIP OK: {entries} entries"
+              )
+
+          print()
+          print("STATUS: PASS")
+          print("All 12 monthly 2017 release assets are")
+          print("present and valid ZIP archives.")
+          PY
+
+      - name: Run real release BTST probe
+        run: |
+          python - <<'PY'
+          from datetime import date
+          from pathlib import Path
+
+          from backtest_runner import run_release_btst_probe
+
+          result = run_release_btst_probe(
+              release_dir=Path("release-data"),
+              year=2017,
+              monthly_zip_name="November.2017.zip",
+              option_type="PE",
+              strike=10050,
+              entry_date=date(2017, 10, 26),
+              exit_date=date(2017, 10, 27),
+          )
+
+          print("Release BTST probe")
+          print("==================")
+          print(f"Archive: {result.get('archive')}")
+          print(f"Monthly ZIP: {result.get('monthly_zip')}")
+          print(f"Option: {result['option_type']}")
+          print(f"Strike: {result['strike']}")
+          print(f"Entry: {result['entry']}")
+          print(f"Exit: {result['exit']}")
+          print("STATUS: PASS")
+          PY
