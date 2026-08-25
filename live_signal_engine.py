@@ -324,6 +324,7 @@ def build_live_signal(
     nifty_price=quote.price,
     expiry=expiry,
     option_type=option_type,
+    selection_mode="ATM",
 )
 
     option_quote = find_option_quote(
