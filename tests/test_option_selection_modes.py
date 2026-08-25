@@ -1,15 +1,9 @@
 from datetime import date
 
-from option_selector import (
-    select_contract,
-)
+from option_selector import select_contract
 
 
-EXPIRY = date(
-    2026,
-    8,
-    27,
-)
+EXPIRY = date(2026, 8, 27)
 
 
 def test_ce_atm():
@@ -21,6 +15,7 @@ def test_ce_atm():
     )
 
     assert contract.strike == 25000
+    assert contract.selection_mode == "ATM"
 
 
 def test_ce_itm():
@@ -32,6 +27,7 @@ def test_ce_itm():
     )
 
     assert contract.strike == 24950
+    assert contract.selection_mode == "ITM"
 
 
 def test_ce_otm():
@@ -43,6 +39,7 @@ def test_ce_otm():
     )
 
     assert contract.strike == 25050
+    assert contract.selection_mode == "OTM"
 
 
 def test_pe_atm():
@@ -54,6 +51,7 @@ def test_pe_atm():
     )
 
     assert contract.strike == 25000
+    assert contract.selection_mode == "ATM"
 
 
 def test_pe_itm():
@@ -65,6 +63,7 @@ def test_pe_itm():
     )
 
     assert contract.strike == 25050
+    assert contract.selection_mode == "ITM"
 
 
 def test_pe_otm():
@@ -76,3 +75,4 @@ def test_pe_otm():
     )
 
     assert contract.strike == 24950
+    assert contract.selection_mode == "OTM"
