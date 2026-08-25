@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Mapping, Optional
 
 import requests
@@ -13,9 +12,7 @@ from live_market_data import (
     normalize_option_quote,
     normalize_underlying_quote,
 )
-from option_chain_confirmation import (
-    OptionChainSnapshot,
-)
+from option_chain_confirmation import OptionChainSnapshot
 
 
 NSE_BASE_URL = "https://www.nseindia.com"
@@ -28,24 +25,64 @@ NSE_OPTION_CHAIN_URL = (
     f"{NSE_BASE_URL}/api/option-chain-indices"
 )
 
-YAHOO_CHART_URL = (
-    "https://query1.finance.yahoo.com/v8/finance/chart/^NSEI"
-)
+NIFTY_SYMBOL = "NIFTY 50"
 
 
-@dataclass(frozen=True)
-class NiftyIndicators:
-    ema20: float
-    ema50: float
-    rsi: float
-    vwap: float
+def _request_headers(
+    referer: str,
+) -> dict[str, str]:
+    return {
+        "User-Agent": (
+            "Mozilla/5.0 (Linux; Android 10) "
+            "AppleWebKit/537.36 "
+            "Chrome/151.0 Mobile Safari/537.36"
+        ),
+        "Accept": (
+            "application/json,text/plain,*/*"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": referer,
+        "Connection": "keep-alive",
+    }
 
 
-@dataclass(frozen=True)
-class NiftyLiveSnapshot:
-    quote: LiveUnderlyingQuote
-    indicators: NiftyIndicators
-    option_chain: OptionChainSnapshot
+def _parse_nse_datetime(
+    value: Any,
+) -> datetime:
+    if isinstance(value, datetime):
+        return value
+
+    if value is None:
+        return datetime.now()
+
+    text = str(value).strip()
+
+    formats = (
+        "%d-%b-%Y %H:%M:%S",
+        "%d-%b-%Y %H:%M",
+        "%d-%m-%Y %H:%M:%S",
+        "%d-%m-%Y %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+    )
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(
+                text,
+                fmt,
+            )
+        except ValueError:
+            continue
+
+    try:
+        return datetime.fromisoformat(
+            text.replace("Z", "+00:00")
+        )
+    except ValueError:
+        return datetime.now()
 
 
 def _number(
@@ -54,10 +91,7 @@ def _number(
 ) -> float:
     try:
         result = float(value)
-    except (
-        TypeError,
-        ValueError,
-    ) as exc:
+    except (TypeError, ValueError) as exc:
         raise LiveMarketDataError(
             f"Invalid {field}: {value!r}"
         ) from exc
@@ -68,36 +102,6 @@ def _number(
         )
 
     return result
-
-
-def _request_json(
-    session: requests.Session,
-    url: str,
-    params: Optional[Mapping[str, Any]] = None,
-) -> Any:
-    try:
-        response = session.get(
-            url,
-            params=params,
-            timeout=15,
-        )
-    except requests.RequestException as exc:
-        raise LiveMarketDataError(
-            f"Live market-data request failed: {exc}"
-        ) from exc
-
-    if response.status_code != 200:
-        raise LiveMarketDataError(
-            "Live market-data request returned "
-            f"HTTP {response.status_code}."
-        )
-
-    try:
-        return response.json()
-    except ValueError as exc:
-        raise LiveMarketDataError(
-            "Live market-data response was not JSON."
-        ) from exc
 
 
 def _extract_quote_payload(
@@ -179,71 +183,18 @@ def _extract_previous_close(
     return float(value)
 
 
-def _extract_timestamp(
-    payload: Mapping[str, Any],
-) -> datetime:
-    value = (
-        payload.get("timestamp")
-        or payload.get("lastUpdateTime")
-        or payload.get("datetime")
-    )
-
-    if value is None:
-        return datetime.now()
-
-    text = str(value).strip()
-
-    formats = (
-        "%d-%b-%Y %H:%M:%S",
-        "%d-%b-%Y %H:%M",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S",
-    )
-
-    for fmt in formats:
-        try:
-            return datetime.strptime(
-                text,
-                fmt,
-            )
-        except ValueError:
-            continue
-
-    try:
-        return datetime.fromisoformat(
-            text.replace(
-                "Z",
-                "+00:00",
-            )
-        )
-    except ValueError:
-        return datetime.now()
-
-
 def fetch_nifty_quote(
     session: Optional[requests.Session] = None,
 ) -> LiveUnderlyingQuote:
-    """
-    Fetch the current NIFTY 50 index quote from NSE.
-    """
-
     client = (
         session
         if session is not None
         else requests.Session()
     )
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Linux; Android 10) "
-            "AppleWebKit/537.36 "
-            "Chrome/151.0 Mobile Safari/537.36"
-        ),
-        "Accept": "application/json,text/plain,*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": f"{NSE_BASE_URL}/",
-        "Connection": "keep-alive",
-    }
+    headers = _request_headers(
+        f"{NSE_BASE_URL}/"
+    )
 
     try:
         client.get(
@@ -251,16 +202,11 @@ def fetch_nifty_quote(
             headers=headers,
             timeout=15,
         )
-    except requests.RequestException as exc:
-        raise LiveMarketDataError(
-            f"Unable to establish NSE session: {exc}"
-        ) from exc
 
-    try:
         response = client.get(
             NSE_INDEX_QUOTE_URL,
             params={
-                "index": "NIFTY 50",
+                "index": NIFTY_SYMBOL,
             },
             headers=headers,
             timeout=15,
@@ -289,8 +235,13 @@ def fetch_nifty_quote(
 
     return normalize_underlying_quote(
         {
-            "timestamp": _extract_timestamp(
-                quote_payload
+            "timestamp": _parse_nse_datetime(
+                quote_payload.get(
+                    "timestamp"
+                )
+                or quote_payload.get(
+                    "lastUpdateTime"
+                )
             ),
             "price": _extract_price(
                 quote_payload
@@ -305,30 +256,15 @@ def fetch_nifty_quote(
 def fetch_nifty_option_chain(
     session: Optional[requests.Session] = None,
 ) -> Mapping[str, Any]:
-    """
-    Fetch the complete current NIFTY option chain
-    from NSE.
-    """
-
     client = (
         session
         if session is not None
         else requests.Session()
     )
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Linux; Android 10) "
-            "AppleWebKit/537.36 "
-            "Chrome/151.0 Mobile Safari/537.36"
-        ),
-        "Accept": "application/json,text/plain,*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": (
-            f"{NSE_BASE_URL}/option-chain"
-        ),
-        "Connection": "keep-alive",
-    }
+    headers = _request_headers(
+        f"{NSE_BASE_URL}/option-chain"
+    )
 
     try:
         client.get(
@@ -407,12 +343,12 @@ def available_nifty_expiries(
             "%Y-%m-%d",
         ):
             try:
-                parsed = datetime.strptime(
-                    text,
-                    fmt,
-                ).date()
-
-                result.append(parsed)
+                result.append(
+                    datetime.strptime(
+                        text,
+                        fmt,
+                    ).date()
+                )
                 break
             except ValueError:
                 continue
@@ -422,9 +358,7 @@ def available_nifty_expiries(
             "No valid NIFTY option expiries were found."
         )
 
-    return sorted(
-        set(result)
-    )
+    return sorted(set(result))
 
 
 def nearest_nifty_expiry(
@@ -487,68 +421,62 @@ def _rows(
     return [
         row
         for row in rows
-        if isinstance(
-            row,
-            Mapping,
-        )
+        if isinstance(row, Mapping)
     ]
 
 
-def build_option_chain_snapshot(
-    option_chain_payload: Mapping[str, Any],
-    nifty_price: float,
-    expiry: date,
-    strikes_each_side: int = 5,
-) -> OptionChainSnapshot:
-    """
-    Aggregate CE/PE OI, OI change and volume around ATM.
-    """
+def _row_expiry(
+    row: Mapping[str, Any],
+) -> Optional[date]:
+    value = row.get("expiryDate")
 
-    if nifty_price <= 0:
-        raise ValueError(
-            "nifty_price must be positive."
-        )
+    if value is None:
+        return None
 
-    if strikes_each_side < 0:
-        raise ValueError(
-            "strikes_each_side cannot be negative."
-        )
+    text = str(value).strip()
 
-    rows = _rows(
-        option_chain_payload
-    )
-
-    eligible = []
-
-    for row in rows:
-        row_expiry = row.get(
-            "expiryDate"
-        )
-
-        if row_expiry is None:
-            continue
-
+    for fmt in (
+        "%d-%b-%Y",
+        "%d-%m-%Y",
+        "%Y-%m-%d",
+    ):
         try:
-            parsed_expiry = datetime.strptime(
-                str(row_expiry).strip(),
-                "%d-%b-%Y",
+            return datetime.strptime(
+                text,
+                fmt,
             ).date()
         except ValueError:
             continue
 
-        if parsed_expiry != expiry:
+    return None
+
+
+def _nearest_strikes(
+    rows: list[Mapping[str, Any]],
+    nifty_price: float,
+    expiry: date,
+    strikes_each_side: int,
+) -> list[tuple[float, Mapping[str, Any]]]:
+    eligible: list[
+        tuple[float, Mapping[str, Any]]
+    ] = []
+
+    for row in rows:
+        row_expiry = _row_expiry(row)
+
+        if row_expiry != expiry:
             continue
 
-        strike = row.get(
-            "strikePrice"
-        )
-
-        if strike is None:
+        try:
+            strike = float(
+                row.get("strikePrice")
+            )
+        except (TypeError, ValueError):
             continue
 
         eligible.append(
             (
-                float(strike),
+                strike,
                 row,
             )
         )
@@ -560,14 +488,39 @@ def build_option_chain_snapshot(
         )
 
     eligible.sort(
-        key=lambda item: abs(
-            item[0] - nifty_price
+        key=lambda item: (
+            abs(item[0] - nifty_price),
+            item[0],
         )
     )
 
-    selected = eligible[
-        : (1 + 2 * strikes_each_side)
+    return eligible[
+        : 1 + (2 * strikes_each_side)
     ]
+
+
+def build_option_chain_snapshot(
+    option_chain_payload: Mapping[str, Any],
+    nifty_price: float,
+    expiry: date,
+    strikes_each_side: int = 5,
+) -> OptionChainSnapshot:
+    if nifty_price <= 0:
+        raise ValueError(
+            "nifty_price must be positive."
+        )
+
+    if strikes_each_side < 0:
+        raise ValueError(
+            "strikes_each_side cannot be negative."
+        )
+
+    selected = _nearest_strikes(
+        _rows(option_chain_payload),
+        nifty_price,
+        expiry,
+        strikes_each_side,
+    )
 
     ce_oi = 0.0
     pe_oi = 0.0
@@ -577,18 +530,10 @@ def build_option_chain_snapshot(
     pe_volume = 0.0
 
     for _, row in selected:
-        ce = row.get(
-            "CE"
-        )
+        ce = row.get("CE")
+        pe = row.get("PE")
 
-        pe = row.get(
-            "PE"
-        )
-
-        if isinstance(
-            ce,
-            Mapping,
-        ):
+        if isinstance(ce, Mapping):
             ce_oi += _number(
                 ce.get("openInterest", 0),
                 "CE open interest",
@@ -610,10 +555,7 @@ def build_option_chain_snapshot(
                 "CE volume",
             )
 
-        if isinstance(
-            pe,
-            Mapping,
-        ):
+        if isinstance(pe, Mapping):
             pe_oi += _number(
                 pe.get("openInterest", 0),
                 "PE open interest",
@@ -653,45 +595,31 @@ def find_option_quote(
 ) -> LiveOptionQuote:
     normalized_type = option_type.upper()
 
-    if normalized_type not in {
-        "CE",
-        "PE",
-    }:
+    if normalized_type not in {"CE", "PE"}:
         raise ValueError(
             "option_type must be CE or PE."
         )
 
-    for row in _rows(
-        option_chain_payload
-    ):
-        try:
-            row_expiry = datetime.strptime(
-                str(
-                    row.get(
-                        "expiryDate"
-                    )
-                ).strip(),
-                "%d-%b-%Y",
-            ).date()
-        except (
-            TypeError,
-            ValueError,
-        ):
-            continue
+    records = option_chain_payload.get(
+        "records",
+        {},
+    )
 
-        if row_expiry != expiry:
+    timestamp = (
+        records.get("timestamp")
+        if isinstance(records, Mapping)
+        else None
+    )
+
+    for row in _rows(option_chain_payload):
+        if _row_expiry(row) != expiry:
             continue
 
         try:
             row_strike = float(
-                row.get(
-                    "strikePrice"
-                )
+                row.get("strikePrice")
             )
-        except (
-            TypeError,
-            ValueError,
-        ):
+        except (TypeError, ValueError):
             continue
 
         if row_strike != float(strike):
@@ -715,20 +643,13 @@ def find_option_quote(
         if price is None:
             continue
 
-        timestamp = (
-            leg.get("timestamp")
-            or option_chain_payload.get(
-                "records",
-                {},
-            ).get(
-                "timestamp",
-                datetime.now().isoformat(),
-            )
-        )
-
         return normalize_option_quote(
             {
-                "timestamp": timestamp,
+                "timestamp": (
+                    leg.get("timestamp")
+                    or timestamp
+                    or datetime.now()
+                ),
                 "expiry": expiry,
                 "strike": strike,
                 "option_type": normalized_type,
