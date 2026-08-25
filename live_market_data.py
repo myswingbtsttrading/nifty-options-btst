@@ -28,9 +28,7 @@ class LiveOptionQuote:
 
 
 class MarketDataClient(Protocol):
-    def get_underlying(
-        self,
-    ) -> LiveUnderlyingQuote:
+    def get_underlying(self) -> LiveUnderlyingQuote:
         ...
 
     def get_option_quote(
@@ -48,10 +46,7 @@ def _positive_float(
 ) -> float:
     try:
         result = float(value)
-    except (
-        TypeError,
-        ValueError,
-    ) as exc:
+    except (TypeError, ValueError) as exc:
         raise LiveMarketDataError(
             f"Invalid {field}: {value!r}"
         ) from exc
@@ -64,9 +59,7 @@ def _positive_float(
     return result
 
 
-def _parse_datetime(
-    value: Any,
-) -> datetime:
+def _parse_datetime(value: Any) -> datetime:
     if isinstance(value, datetime):
         return value
 
@@ -84,23 +77,21 @@ def _parse_datetime(
         "%Y-%m-%dT%H:%M",
         "%d-%m-%Y %H:%M:%S",
         "%d-%m-%Y %H:%M",
+        "%d-%b-%Y %H:%M:%S",
+        "%d-%b-%Y %H:%M",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
     )
 
     for fmt in formats:
         try:
-            return datetime.strptime(
-                text,
-                fmt,
-            )
+            return datetime.strptime(text, fmt)
         except ValueError:
             continue
 
     try:
         return datetime.fromisoformat(
-            text.replace(
-                "Z",
-                "+00:00",
-            )
+            text.replace("Z", "+00:00")
         )
     except ValueError as exc:
         raise LiveMarketDataError(
@@ -108,9 +99,7 @@ def _parse_datetime(
         ) from exc
 
 
-def _parse_expiry(
-    value: Any,
-) -> date:
+def _parse_expiry(value: Any) -> date:
     if isinstance(value, datetime):
         return value.date()
 
@@ -129,6 +118,7 @@ def _parse_expiry(
         "%d-%m-%Y",
         "%d/%m/%Y",
         "%Y/%m/%d",
+        "%d-%b-%Y",
     )
 
     for fmt in formats:
@@ -210,9 +200,7 @@ def normalize_underlying_quote(
         )
 
     return LiveUnderlyingQuote(
-        timestamp=_parse_datetime(
-            timestamp
-        ),
+        timestamp=_parse_datetime(timestamp),
         price=_positive_float(
             price,
             "underlying price",
@@ -305,22 +293,15 @@ def normalize_option_quote(
         option_type
     ).strip().upper()
 
-    if normalized_type not in {
-        "CE",
-        "PE",
-    }:
+    if normalized_type not in {"CE", "PE"}:
         raise LiveMarketDataError(
             f"Unsupported option type: "
             f"{normalized_type}"
         )
 
     return LiveOptionQuote(
-        timestamp=_parse_datetime(
-            timestamp
-        ),
-        expiry=_parse_expiry(
-            expiry
-        ),
+        timestamp=_parse_datetime(timestamp),
+        expiry=_parse_expiry(expiry),
         strike=_positive_float(
             strike,
             "option strike",
@@ -334,18 +315,9 @@ def normalize_option_quote(
 
 
 class HttpMarketDataClient:
-    """
-    Generic HTTP market-data adapter.
-
-    The actual vendor/API endpoint is intentionally injected
-    through callables rather than hard-coded into the strategy.
-    """
-
     def __init__(
         self,
-        session: Optional[
-            requests.Session
-        ] = None,
+        session: Optional[requests.Session] = None,
         timeout_seconds: float = 15.0,
     ) -> None:
         if timeout_seconds <= 0:
@@ -359,9 +331,7 @@ class HttpMarketDataClient:
             else requests.Session()
         )
 
-        self.timeout_seconds = (
-            timeout_seconds
-        )
+        self.timeout_seconds = timeout_seconds
 
     def get_json(
         self,
@@ -405,12 +375,6 @@ class HttpMarketDataClient:
 
 
 class MockMarketDataClient:
-    """
-    Deterministic client for tests and paper validation.
-
-    This is deliberately not connected to a broker.
-    """
-
     def __init__(
         self,
         underlying: LiveUnderlyingQuote,
