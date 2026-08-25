@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Mapping, Optional
 
+from option_selector import select_live_contract
+
 from live_market_data import LiveMarketDataError
 from nse_live_data import (
     build_option_chain_snapshot,
@@ -317,11 +319,12 @@ def build_live_signal(
             else "PE"
         )
 
-    contract = select_atm_contract(
-        nifty_price=quote.price,
-        expiry=expiry,
-        option_type=option_type,
-    )
+    contract = select_live_contract(
+    option_chain_payload=option_chain,
+    nifty_price=quote.price,
+    expiry=expiry,
+    option_type=option_type,
+)
 
     option_quote = find_option_quote(
         option_chain_payload=option_chain,
