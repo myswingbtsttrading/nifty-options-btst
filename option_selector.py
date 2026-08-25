@@ -1,169 +1,62 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal
-
-from config import STRIKE_INTERVAL
+from typing import Any, Mapping
 
 
-OptionType = Literal["CE", "PE"]
-StrikeMode = Literal["ATM", "ITM", "OTM"]
+class OptionSelectionError(ValueError):
+    """Raised when a suitable NIFTY option contract cannot be selected."""
 
 
 @dataclass(frozen=True)
 class OptionContract:
     expiry: date
-    strike: float
+    strike: int
     option_type: str
-    selection_mode: str = "ATM"
-
-    @property
-    def symbol_suffix(self) -> str:
-        return f"{int(self.strike)}{self.option_type}"
-
-
-def round_to_strike(
-    nifty_price: float,
-) -> float:
-    if nifty_price <= 0:
-        raise ValueError(
-            "NIFTY price must be positive."
-        )
-
-    if STRIKE_INTERVAL <= 0:
-        raise ValueError(
-            "STRIKE_INTERVAL must be positive."
-        )
-
-    return (
-        round(
-            nifty_price / STRIKE_INTERVAL
-        )
-        * STRIKE_INTERVAL
-    )
 
 
 def _validate_option_type(
     option_type: str,
 ) -> str:
-    option_type = option_type.upper()
+    normalized = str(option_type).strip().upper()
 
-    if option_type not in {"CE", "PE"}:
-        raise ValueError(
+    if normalized not in {"CE", "PE"}:
+        raise OptionSelectionError(
             "option_type must be CE or PE."
         )
 
-    return option_type
+    return normalized
 
 
-def _validate_selection_mode(
-    selection_mode: str,
-) -> str:
-    selection_mode = selection_mode.upper()
-
-    if selection_mode not in {
-        "ATM",
-        "ITM",
-        "OTM",
-    }:
-        raise ValueError(
-            "selection_mode must be ATM, ITM or OTM."
+def _validate_strike_interval(
+    strike_interval: int,
+) -> int:
+    if strike_interval <= 0:
+        raise OptionSelectionError(
+            "strike_interval must be positive."
         )
 
-    return selection_mode
+    return int(strike_interval)
 
 
-def _strike_for_mode(
-    atm_strike: float,
-    option_type: str,
-    selection_mode: str,
-) -> float:
-    """
-    Calculate the strike relative to ATM.
-
-    CE:
-        ATM = ATM
-        ITM = ATM - interval
-        OTM = ATM + interval
-
-    PE:
-        ATM = ATM
-        ITM = ATM + interval
-        OTM = ATM - interval
-    """
-
-    if selection_mode == "ATM":
-        return atm_strike
-
-    if option_type == "CE":
-        if selection_mode == "ITM":
-            return atm_strike - STRIKE_INTERVAL
-
-        return atm_strike + STRIKE_INTERVAL
-
-    if selection_mode == "ITM":
-        return atm_strike + STRIKE_INTERVAL
-
-    return atm_strike - STRIKE_INTERVAL
-
-
-def select_contract(
+def select_atm_strike(
     nifty_price: float,
-    expiry: date,
-    option_type: str,
-    selection_mode: str = "ATM",
-) -> OptionContract:
-    """
-    Select a NIFTY option contract relative to ATM.
-
-    This function performs contract selection only.
-
-    It does not:
-        - fetch option prices
-        - evaluate liquidity
-        - calculate target/stop
-        - calculate quantity
-
-    Those responsibilities are implemented in later steps.
-    """
-
+    strike_interval: int = 50,
+) -> int:
     if nifty_price <= 0:
-        raise ValueError(
-            "NIFTY price must be positive."
+        raise OptionSelectionError(
+            "nifty_price must be positive."
         )
 
-    if not isinstance(expiry, date):
-        raise ValueError(
-            "expiry must be a datetime.date."
-        )
-
-    option_type = _validate_option_type(
-        option_type
+    interval = _validate_strike_interval(
+        strike_interval
     )
 
-    selection_mode = _validate_selection_mode(
-        selection_mode
-    )
-
-    atm_strike = round_to_strike(
-        nifty_price
-    )
-
-    strike = _strike_for_mode(
-        atm_strike=atm_strike,
-        option_type=option_type,
-        selection_mode=selection_mode,
-    )
-
-    if strike <= 0:
-        raise ValueError(
-            "Calculated strike must be positive."
-        )
-
-    return OptionContract(
-        expiry=expiry,
-        strike=strike,
-        option_type=option_type,
-        selection_mode=selection_mode,
+    return int(
+        round(
+            nifty_price / interval
+        ) * interval
     )
 
 
@@ -171,48 +64,183 @@ def select_atm_contract(
     nifty_price: float,
     expiry: date,
     option_type: str,
+    strike_interval: int = 50,
 ) -> OptionContract:
-    """
-    Backward-compatible ATM selector.
-    """
+    normalized_type = _validate_option_type(
+        option_type
+    )
 
-    return select_contract(
+    if not isinstance(expiry, date):
+        raise OptionSelectionError(
+            "expiry must be a date."
+        )
+
+    strike = select_atm_strike(
         nifty_price=nifty_price,
+        strike_interval=strike_interval,
+    )
+
+    return OptionContract(
         expiry=expiry,
-        option_type=option_type,
-        selection_mode="ATM",
+        strike=strike,
+        option_type=normalized_type,
     )
 
 
-def select_itm_contract(
-    nifty_price: float,
-    expiry: date,
-    option_type: str,
-) -> OptionContract:
-    """
-    Select one strike ITM.
-    """
+def _row_expiry(
+    row: Mapping[str, Any],
+) -> date | None:
+    value = row.get("expiryDate")
 
-    return select_contract(
-        nifty_price=nifty_price,
-        expiry=expiry,
-        option_type=option_type,
-        selection_mode="ITM",
+    if isinstance(value, date):
+        return value
+
+    if value is None:
+        return None
+
+    text = str(value).strip()
+
+    from datetime import datetime
+
+    for fmt in (
+        "%d-%b-%Y",
+        "%d-%m-%Y",
+        "%Y-%m-%d",
+    ):
+        try:
+            return datetime.strptime(
+                text,
+                fmt,
+            ).date()
+        except ValueError:
+            continue
+
+    return None
+
+
+def _available_contracts(
+    payload: Mapping[str, Any],
+    expiry: date,
+) -> list[OptionContract]:
+    records = payload.get(
+        "records",
+        {},
     )
 
+    if not isinstance(
+        records,
+        Mapping,
+    ):
+        raise OptionSelectionError(
+            "Option-chain records are invalid."
+        )
 
-def select_otm_contract(
+    rows = records.get(
+        "data",
+        [],
+    )
+
+    if not isinstance(
+        rows,
+        list,
+    ):
+        raise OptionSelectionError(
+            "Option-chain data is invalid."
+        )
+
+    contracts: list[OptionContract] = []
+
+    for row in rows:
+        if not isinstance(
+            row,
+            Mapping,
+        ):
+            continue
+
+        if _row_expiry(row) != expiry:
+            continue
+
+        try:
+            strike = int(
+                float(
+                    row["strikePrice"]
+                )
+            )
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+        ):
+            continue
+
+        for option_type in ("CE", "PE"):
+            leg = row.get(option_type)
+
+            if isinstance(
+                leg,
+                Mapping,
+            ):
+                last_price = (
+                    leg.get("lastPrice")
+                    or leg.get("close")
+                )
+
+                if last_price is None:
+                    continue
+
+                try:
+                    price = float(last_price)
+                except (
+                    TypeError,
+                    ValueError,
+                ):
+                    continue
+
+                if price <= 0:
+                    continue
+
+                contracts.append(
+                    OptionContract(
+                        expiry=expiry,
+                        strike=strike,
+                        option_type=option_type,
+                    )
+                )
+
+    return contracts
+
+
+def select_live_contract(
+    option_chain_payload: Mapping[str, Any],
     nifty_price: float,
     expiry: date,
     option_type: str,
+    strike_interval: int = 50,
 ) -> OptionContract:
     """
-    Select one strike OTM.
+    Select the ATM contract only if it is actually present
+    and has a valid live price in the supplied NSE chain.
     """
 
-    return select_contract(
+    candidate = select_atm_contract(
         nifty_price=nifty_price,
         expiry=expiry,
         option_type=option_type,
-        selection_mode="OTM",
+        strike_interval=strike_interval,
+    )
+
+    available = _available_contracts(
+        option_chain_payload,
+        expiry,
+    )
+
+    if candidate in available:
+        return candidate
+
+    raise OptionSelectionError(
+        "ATM option contract is not available "
+        "with a valid live price: "
+        f"{candidate.option_type} "
+        f"{candidate.strike} "
+        f"{candidate.expiry}."
     )
