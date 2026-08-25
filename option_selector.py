@@ -27,6 +27,17 @@ def _validate_option_type(option_type: str) -> str:
     return normalized
 
 
+def _validate_selection_mode(selection_mode: str) -> str:
+    normalized = str(selection_mode).strip().upper()
+
+    if normalized not in {"ATM", "ITM", "OTM"}:
+        raise OptionSelectionError(
+            "selection_mode must be ATM, ITM, or OTM."
+        )
+
+    return normalized
+
+
 def _validate_strike_interval(strike_interval: int) -> int:
     if strike_interval <= 0:
         raise OptionSelectionError(
@@ -40,7 +51,7 @@ def round_to_strike(
     nifty_price: float,
     strike_interval: int = 50,
 ) -> int:
-    """Backward-compatible strike rounding used by the backtester."""
+    """Backward-compatible NIFTY strike rounding."""
     if nifty_price <= 0:
         raise OptionSelectionError(
             "nifty_price must be positive."
@@ -67,12 +78,82 @@ def select_atm_strike(
     )
 
 
+def select_strike(
+    nifty_price: float,
+    option_type: str,
+    selection_mode: str = "ATM",
+    strike_interval: int = 50,
+) -> int:
+    """
+    Select ATM / ITM / OTM strike for a directional option.
+
+    CE:
+        ITM = lower strike
+        OTM = higher strike
+
+    PE:
+        ITM = higher strike
+        OTM = lower strike
+    """
+    normalized_type = _validate_option_type(
+        option_type
+    )
+
+    mode = _validate_selection_mode(
+        selection_mode
+    )
+
+    atm = select_atm_strike(
+        nifty_price=nifty_price,
+        strike_interval=strike_interval,
+    )
+
+    interval = _validate_strike_interval(
+        strike_interval
+    )
+
+    if mode == "ATM":
+        return atm
+
+    if normalized_type == "CE":
+        if mode == "ITM":
+            return atm - interval
+
+        return atm + interval
+
+    if mode == "ITM":
+        return atm + interval
+
+    return atm - interval
+
+
 def select_atm_contract(
     nifty_price: float,
     expiry: date,
     option_type: str,
     strike_interval: int = 50,
 ) -> OptionContract:
+    return select_contract(
+        nifty_price=nifty_price,
+        expiry=expiry,
+        option_type=option_type,
+        selection_mode="ATM",
+        strike_interval=strike_interval,
+    )
+
+
+def select_contract(
+    nifty_price: float,
+    expiry: date,
+    option_type: str,
+    selection_mode: str = "ATM",
+    strike_interval: int = 50,
+) -> OptionContract:
+    """
+    Backward-compatible general contract selector.
+
+    Supports ATM, ITM and OTM selection.
+    """
     normalized_type = _validate_option_type(
         option_type
     )
@@ -82,8 +163,10 @@ def select_atm_contract(
             "expiry must be a date."
         )
 
-    strike = select_atm_strike(
+    strike = select_strike(
         nifty_price=nifty_price,
+        option_type=normalized_type,
+        selection_mode=selection_mode,
         strike_interval=strike_interval,
     )
 
@@ -91,27 +174,6 @@ def select_atm_contract(
         expiry=expiry,
         strike=strike,
         option_type=normalized_type,
-    )
-
-
-def select_contract(
-    nifty_price: float,
-    expiry: date,
-    option_type: str,
-    strike_interval: int = 50,
-) -> OptionContract:
-    """
-    Backward-compatible contract selector.
-
-    Existing backtest and BTST runner code can continue using
-    select_contract() while the live scanner uses the stricter
-    select_live_contract().
-    """
-    return select_atm_contract(
-        nifty_price=nifty_price,
-        expiry=expiry,
-        option_type=option_type,
-        strike_interval=strike_interval,
     )
 
 
@@ -248,16 +310,18 @@ def select_live_contract(
     nifty_price: float,
     expiry: date,
     option_type: str,
+    selection_mode: str = "ATM",
     strike_interval: int = 50,
 ) -> OptionContract:
     """
-    Select the ATM contract only when that exact contract exists
-    in the live option-chain payload and has a valid price.
+    Select the requested contract only when it actually exists
+    in the live NSE option-chain payload with a valid price.
     """
-    candidate = select_atm_contract(
+    candidate = select_contract(
         nifty_price=nifty_price,
         expiry=expiry,
         option_type=option_type,
+        selection_mode=selection_mode,
         strike_interval=strike_interval,
     )
 
@@ -270,7 +334,7 @@ def select_live_contract(
         return candidate
 
     raise OptionSelectionError(
-        "ATM option contract is not available "
+        "Requested option contract is not available "
         "with a valid live price: "
         f"{candidate.option_type} "
         f"{candidate.strike} "
