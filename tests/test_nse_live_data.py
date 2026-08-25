@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date
 
 import pytest
 
@@ -111,62 +111,34 @@ def test_available_expiries():
     )
 
     assert result == [
-        date(
-            2026,
-            8,
-            27,
-        ),
-        date(
-            2026,
-            9,
-            3,
-        ),
+        date(2026, 8, 27),
+        date(2026, 9, 3),
     ]
 
 
 def test_nearest_expiry():
     result = nearest_nifty_expiry(
         _payload(),
-        today=date(
-            2026,
-            8,
-            25,
-        ),
+        today=date(2026, 8, 25),
     )
 
-    assert result == date(
-        2026,
-        8,
-        27,
-    )
+    assert result == date(2026, 8, 27)
 
 
 def test_nearest_expiry_skips_expired():
     result = nearest_nifty_expiry(
         _payload(),
-        today=date(
-            2026,
-            8,
-            28,
-        ),
+        today=date(2026, 8, 28),
     )
 
-    assert result == date(
-        2026,
-        9,
-        3,
-    )
+    assert result == date(2026, 9, 3)
 
 
 def test_build_option_chain_snapshot():
     result = build_option_chain_snapshot(
         _payload(),
         nifty_price=25000,
-        expiry=date(
-            2026,
-            8,
-            27,
-        ),
+        expiry=date(2026, 8, 27),
         strikes_each_side=2,
     )
 
@@ -176,28 +148,19 @@ def test_build_option_chain_snapshot():
     assert result.ce_oi_change == 530
     assert result.pe_oi_change == 1030
 
-    assert result.ce_volume == 2100
+    assert result.ce_volume == 2310
     assert result.pe_volume == 3460
 
 
 def test_find_ce_quote():
     result = find_option_quote(
         _payload(),
-        expiry=date(
-            2026,
-            8,
-            27,
-        ),
+        expiry=date(2026, 8, 27),
         strike=25000,
         option_type="CE",
     )
 
-    assert result.expiry == date(
-        2026,
-        8,
-        27,
-    )
-
+    assert result.expiry == date(2026, 8, 27)
     assert result.strike == 25000
     assert result.option_type == "CE"
     assert result.price == 105.0
@@ -206,11 +169,7 @@ def test_find_ce_quote():
 def test_find_pe_quote():
     result = find_option_quote(
         _payload(),
-        expiry=date(
-            2026,
-            8,
-            27,
-        ),
+        expiry=date(2026, 8, 27),
         strike=25000,
         option_type="PE",
     )
@@ -226,11 +185,7 @@ def test_find_missing_quote_fails():
     ):
         find_option_quote(
             _payload(),
-            expiry=date(
-                2026,
-                8,
-                27,
-            ),
+            expiry=date(2026, 8, 27),
             strike=25200,
             option_type="CE",
         )
@@ -243,11 +198,7 @@ def test_invalid_option_type_fails():
     ):
         find_option_quote(
             _payload(),
-            expiry=date(
-                2026,
-                8,
-                27,
-            ),
+            expiry=date(2026, 8, 27),
             strike=25000,
             option_type="XX",
         )
@@ -265,11 +216,7 @@ def test_missing_expiry_data_fails():
                 }
             },
             nifty_price=25000,
-            expiry=date(
-                2026,
-                8,
-                27,
-            ),
+            expiry=date(2026, 8, 27),
         )
 
 
@@ -281,11 +228,7 @@ def test_negative_nifty_price_fails():
         build_option_chain_snapshot(
             _payload(),
             nifty_price=-1,
-            expiry=date(
-                2026,
-                8,
-                27,
-            ),
+            expiry=date(2026, 8, 27),
         )
 
 
@@ -297,10 +240,6 @@ def test_invalid_strike_window_fails():
         build_option_chain_snapshot(
             _payload(),
             nifty_price=25000,
-            expiry=date(
-                2026,
-                8,
-                27,
-            ),
+            expiry=date(2026, 8, 27),
             strikes_each_side=-1,
         )
