@@ -5,23 +5,14 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from btst_signal_runner import (
-    BTSTRunnerConfig,
-    run_3pm_signal,
-)
 from live_market_data import LiveMarketDataError
+from live_signal_engine import build_live_signal
+from notifier import send_alert
 from nse_live_data import (
     fetch_nifty_option_chain,
     fetch_nifty_quote,
     nearest_nifty_expiry,
 )
-from notifier import send_alert
-from option_selector import OptionContract
-from signal_builder import OptionQuote
-from live_signal_engine import calculate_indicators
-from option_chain_confirmation import OptionChainSnapshot
-from option_strategy import generate_signal
-
 
 DATA_DIR = Path("data")
 STATE_FILE = DATA_DIR / "live_btst_signal.json"
@@ -32,13 +23,11 @@ def _load_historical_nifty_rows(
     previous_close: float,
 ) -> list[dict[str, Any]]:
     """
-    Build a deterministic recent NIFTY history for the live engine.
+    Build recent NIFTY history for the live signal engine.
 
-    NSE supplies the current market snapshot and option chain, while
-    the repository's live engine requires at least 50 underlying prices.
-    We use Yahoo Finance's public chart endpoint as the historical
-    daily-price source and keep the current NSE price as the final
-    observation.
+    NSE supplies the current NIFTY price. Yahoo Finance supplies
+    the recent daily history required by the indicator engine.
+    The current NSE price is appended as the latest observation.
     """
     import requests
 
@@ -49,7 +38,9 @@ def _load_historical_nifty_rows(
         "https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI",
         params={
             "period1": int(start.timestamp()),
-            "period2": int((now + timedelta(days=1)).timestamp()),
+            "period2": int(
+                (now + timedelta(days=1)).timestamp()
+            ),
             "interval": "1d",
             "events": "history",
         },
@@ -63,6 +54,7 @@ def _load_historical_nifty_rows(
         },
         timeout=30,
     )
+
     response.raise_for_status()
 
     payload = response.json()
@@ -77,6 +69,7 @@ def _load_historical_nifty_rows(
     chart = result[0]
 
     timestamps = chart.get("timestamp", [])
+
     closes = (
         chart.get("indicators", {})
         .get("quote", [{}])[0]
@@ -151,10 +144,14 @@ def _format_signal_message(
         f"Target: ₹{signal.target:,.2f}\n\n"
         f"Lots: {signal.lots}\n"
         f"Quantity: {signal.quantity}\n"
-        f"Capital Required: ₹{signal.capital_required:,.2f}\n"
-        f"Planned Risk: ₹{signal.planned_risk:,.2f}\n"
-        f"Risk/Reward: {signal.risk_reward_ratio:.2f}\n"
-        f"Confidence: {signal.confidence:.1f}%\n\n"
+        f"Capital Required: "
+        f"₹{signal.capital_required:,.2f}\n"
+        f"Planned Risk: "
+        f"₹{signal.planned_risk:,.2f}\n"
+        f"Risk/Reward: "
+        f"{signal.risk_reward_ratio:.2f}\n"
+        f"Confidence: "
+        f"{signal.confidence:.1f}%\n\n"
         f"NIFTY: ₹{signal.nifty_price:,.2f}\n"
         f"EMA20: {indicators.ema20:.2f}\n"
         f"EMA50: {indicators.ema50:.2f}\n"
@@ -179,8 +176,6 @@ def run_3pm() -> None:
         chain,
         today=date.today(),
     )
-
-    from live_signal_engine import build_live_signal
 
     result = build_live_signal(
         historical_rows=historical_rows,
@@ -211,6 +206,7 @@ def run_smoke() -> None:
     print(
         "NIFTY Options BTST production runner initialized."
     )
+
     print(
         "Modes: 3pm, smoke."
     )
