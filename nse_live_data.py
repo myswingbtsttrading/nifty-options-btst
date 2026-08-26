@@ -1,49 +1,130 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from typing import Any, Mapping, Optional
+from dataclasses import dataclass
+from datetime import date, datetime
+from typing import Any
 
 import requests
 
 from live_market_data import (
     LiveMarketDataError,
-    LiveOptionQuote,
-    LiveUnderlyingQuote,
     normalize_option_quote,
-    normalize_underlying_quote,
 )
-from option_chain_confirmation import OptionChainSnapshot
 
 
 NSE_BASE_URL = "https://www.nseindia.com"
 
-NSE_INDEX_QUOTE_URL = (
-    f"{NSE_BASE_URL}/api/equity-stockIndices"
-)
+NSE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Linux; Android 10; K) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/151.0.0.0 Mobile Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,"
+        "application/xml;q=0.9,image/avif,image/webp,"
+        "image/apng,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.nseindia.com/",
+    "Connection": "keep-alive",
+}
 
-NSE_OPTION_CHAIN_URL = (
-    f"{NSE_BASE_URL}/api/option-chain-indices"
-)
 
-NIFTY_SYMBOL = "NIFTY 50"
+@dataclass(frozen=True)
+class NiftyQuote:
+    timestamp: datetime
+    price: float
+    previous_close: float
 
 
-def _request_headers(
-    referer: str,
-) -> dict[str, str]:
-    return {
-        "User-Agent": (
-            "Mozilla/5.0 (Linux; Android 10) "
-            "AppleWebKit/537.36 "
-            "Chrome/151.0 Mobile Safari/537.36"
-        ),
-        "Accept": (
-            "application/json,text/plain,*/*"
-        ),
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": referer,
-        "Connection": "keep-alive",
-    }
+@dataclass(frozen=True)
+class OptionChainSnapshot:
+    ce_oi: float
+    pe_oi: float
+    ce_oi_change: float
+    pe_oi_change: float
+    ce_volume: float
+    pe_volume: float
+
+
+@dataclass(frozen=True)
+class NiftyOptionChain:
+    timestamp: datetime
+    underlying_value: float
+    expiry_dates: tuple[date, ...]
+    records: tuple[dict[str, Any], ...]
+
+
+def _session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update(NSE_HEADERS)
+
+    try:
+        session.get(
+            NSE_BASE_URL,
+            timeout=20,
+        )
+    except requests.RequestException:
+        pass
+
+    return session
+
+
+def _get_json(
+    session: requests.Session,
+    url: str,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        response = session.get(
+            url,
+            params=params,
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        raise LiveMarketDataError(
+            f"NSE request failed: {exc}"
+        ) from exc
+
+    if response.status_code != 200:
+        raise LiveMarketDataError(
+            f"NSE request returned HTTP "
+            f"{response.status_code}."
+        )
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise LiveMarketDataError(
+            "NSE returned invalid JSON."
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise LiveMarketDataError(
+            "NSE returned an unexpected response."
+        )
+
+    return payload
+
+
+def _first_float(
+    *values: Any,
+) -> float | None:
+    for value in values:
+        if value is None:
+            continue
+
+        try:
+            return float(value)
+        except (
+            TypeError,
+            ValueError,
+        ):
+            continue
+
+    return None
 
 
 def _parse_nse_datetime(
@@ -79,367 +160,33 @@ def _parse_nse_datetime(
 
     try:
         return datetime.fromisoformat(
-            text.replace("Z", "+00:00")
+            text.replace(
+                "Z",
+                "+00:00",
+            )
         )
     except ValueError:
         return datetime.now()
 
 
-def _number(
+def _parse_expiry(
     value: Any,
-    field: str,
-) -> float:
-    try:
-        result = float(value)
-    except (TypeError, ValueError) as exc:
-        raise LiveMarketDataError(
-            f"Invalid {field}: {value!r}"
-        ) from exc
-
-    if result < 0:
-        raise LiveMarketDataError(
-            f"{field} cannot be negative."
-        )
-
-    return result
-
-
-def _extract_quote_payload(
-    payload: Mapping[str, Any],
-) -> Mapping[str, Any]:
-    data = payload.get("data")
-
-    if isinstance(data, list) and data:
-        first = data[0]
-
-        if isinstance(first, Mapping):
-            return first
-
-    if isinstance(data, Mapping):
-        return data
-
-    if "priceInfo" in payload:
-        return payload
-
-    raise LiveMarketDataError(
-        "NIFTY quote response has an unexpected structure."
-    )
-
-
-def _extract_price(
-    payload: Mapping[str, Any],
-) -> float:
-    price_info = payload.get(
-        "priceInfo",
-        {},
-    )
-
-    if not isinstance(
-        price_info,
-        Mapping,
-    ):
-        price_info = {}
-
-    value = (
-        price_info.get("lastPrice")
-        or payload.get("lastPrice")
-        or payload.get("ltp")
-        or payload.get("price")
-    )
-
-    if value is None:
-        raise LiveMarketDataError(
-            "NIFTY quote does not contain last price."
-        )
-
-    return float(value)
-
-
-def _extract_previous_close(
-    payload: Mapping[str, Any],
-) -> float:
-    price_info = payload.get(
-        "priceInfo",
-        {},
-    )
-
-    if not isinstance(
-        price_info,
-        Mapping,
-    ):
-        price_info = {}
-
-    value = (
-        price_info.get("previousClose")
-        or payload.get("previousClose")
-        or payload.get("previous_close")
-    )
-
-    if value is None:
-        raise LiveMarketDataError(
-            "NIFTY quote does not contain previous close."
-        )
-
-    return float(value)
-
-
-def fetch_nifty_quote(
-    session: Optional[requests.Session] = None,
-) -> LiveUnderlyingQuote:
-    client = (
-        session
-        if session is not None
-        else requests.Session()
-    )
-
-    headers = _request_headers(
-        f"{NSE_BASE_URL}/"
-    )
-
-    try:
-        client.get(
-            NSE_BASE_URL,
-            headers=headers,
-            timeout=15,
-        )
-
-        response = client.get(
-            NSE_INDEX_QUOTE_URL,
-            params={
-                "index": NIFTY_SYMBOL,
-            },
-            headers=headers,
-            timeout=15,
-        )
-    except requests.RequestException as exc:
-        raise LiveMarketDataError(
-            f"Unable to fetch NIFTY quote: {exc}"
-        ) from exc
-
-    if response.status_code != 200:
-        raise LiveMarketDataError(
-            "NSE NIFTY quote returned "
-            f"HTTP {response.status_code}."
-        )
-
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise LiveMarketDataError(
-            "NSE NIFTY quote was not valid JSON."
-        ) from exc
-
-    quote_payload = _extract_quote_payload(
-        payload
-    )
-
-    return normalize_underlying_quote(
-        {
-            "timestamp": _parse_nse_datetime(
-                quote_payload.get(
-                    "timestamp"
-                )
-                or quote_payload.get(
-                    "lastUpdateTime"
-                )
-            ),
-            "price": _extract_price(
-                quote_payload
-            ),
-            "previous_close": _extract_previous_close(
-                quote_payload
-            ),
-        }
-    )
-
-
-def fetch_nifty_option_chain(
-    session: Optional[requests.Session] = None,
-) -> Mapping[str, Any]:
-    client = (
-        session
-        if session is not None
-        else requests.Session()
-    )
-
-    headers = _request_headers(
-        f"{NSE_BASE_URL}/option-chain"
-    )
-
-    try:
-        client.get(
-            NSE_BASE_URL,
-            headers=headers,
-            timeout=15,
-        )
-
-        response = client.get(
-            NSE_OPTION_CHAIN_URL,
-            params={
-                "symbol": "NIFTY",
-            },
-            headers=headers,
-            timeout=15,
-        )
-    except requests.RequestException as exc:
-        raise LiveMarketDataError(
-            f"Unable to fetch NIFTY option chain: {exc}"
-        ) from exc
-
-    if response.status_code != 200:
-        raise LiveMarketDataError(
-            "NSE option-chain request returned "
-            f"HTTP {response.status_code}."
-        )
-
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise LiveMarketDataError(
-            "NSE option-chain response was not valid JSON."
-        ) from exc
-
-    if not isinstance(
-        payload,
-        Mapping,
-    ):
-        raise LiveMarketDataError(
-            "NSE option-chain response has an "
-            "unexpected structure."
-        )
-
-    return payload
-
-
-def available_nifty_expiries(
-    option_chain_payload: Mapping[str, Any],
-) -> list[date]:
-    records = option_chain_payload.get(
-        "records",
-        {},
-    )
-
-    if not isinstance(
-        records,
-        Mapping,
-    ):
-        raise LiveMarketDataError(
-            "Option-chain records are missing."
-        )
-
-    raw_expiries = records.get(
-        "expiryDates",
-        [],
-    )
-
-    result: list[date] = []
-
-    for value in raw_expiries:
-        text = str(value).strip()
-
-        for fmt in (
-            "%d-%b-%Y",
-            "%d-%m-%Y",
-            "%Y-%m-%d",
-        ):
-            try:
-                result.append(
-                    datetime.strptime(
-                        text,
-                        fmt,
-                    ).date()
-                )
-                break
-            except ValueError:
-                continue
-
-    if not result:
-        raise LiveMarketDataError(
-            "No valid NIFTY option expiries were found."
-        )
-
-    return sorted(set(result))
-
-
-def nearest_nifty_expiry(
-    option_chain_payload: Mapping[str, Any],
-    today: Optional[date] = None,
-) -> date:
-    current_date = (
-        today
-        if today is not None
-        else date.today()
-    )
-
-    expiries = available_nifty_expiries(
-        option_chain_payload
-    )
-
-    future = [
-        expiry
-        for expiry in expiries
-        if expiry >= current_date
-    ]
-
-    if not future:
-        raise LiveMarketDataError(
-            "No current or future NIFTY expiry found."
-        )
-
-    return future[0]
-
-
-def _rows(
-    payload: Mapping[str, Any],
-) -> list[Mapping[str, Any]]:
-    records = payload.get(
-        "records",
-        {},
-    )
-
-    if not isinstance(
-        records,
-        Mapping,
-    ):
-        raise LiveMarketDataError(
-            "Option-chain records are invalid."
-        )
-
-    rows = records.get(
-        "data",
-        [],
-    )
-
-    if not isinstance(
-        rows,
-        list,
-    ):
-        raise LiveMarketDataError(
-            "Option-chain data is invalid."
-        )
-
-    return [
-        row
-        for row in rows
-        if isinstance(row, Mapping)
-    ]
-
-
-def _row_expiry(
-    row: Mapping[str, Any],
-) -> Optional[date]:
-    value = row.get("expiryDate")
+) -> date | None:
+    if isinstance(value, date):
+        return value
 
     if value is None:
         return None
 
     text = str(value).strip()
 
-    for fmt in (
+    formats = (
         "%d-%b-%Y",
         "%d-%m-%Y",
         "%Y-%m-%d",
-    ):
+    )
+
+    for fmt in formats:
         try:
             return datetime.strptime(
                 text,
@@ -451,75 +198,375 @@ def _row_expiry(
     return None
 
 
-def _nearest_strikes(
-    rows: list[Mapping[str, Any]],
-    nifty_price: float,
-    expiry: date,
-    strikes_each_side: int,
-) -> list[tuple[float, Mapping[str, Any]]]:
-    eligible: list[
-        tuple[float, Mapping[str, Any]]
-    ] = []
+def _extract_quote_from_nse_payload(
+    payload: dict[str, Any],
+) -> NiftyQuote:
+    data = payload.get("data")
 
-    for row in rows:
-        row_expiry = _row_expiry(row)
+    if isinstance(data, dict):
+        info = data.get("info", data)
 
-        if row_expiry != expiry:
-            continue
-
-        try:
-            strike = float(
-                row.get("strikePrice")
-            )
-        except (TypeError, ValueError):
-            continue
-
-        eligible.append(
-            (
-                strike,
-                row,
-            )
+        price = _first_float(
+            info.get("lastPrice"),
+            info.get("last"),
+            info.get("ltp"),
         )
 
-    if not eligible:
+        previous_close = _first_float(
+            info.get("previousClose"),
+            info.get("prevClose"),
+            info.get("previous_close"),
+        )
+
+        timestamp = (
+            data.get("timestamp")
+            or info.get("timestamp")
+            or payload.get("timestamp")
+        )
+
+    else:
+        info = payload
+
+        price = _first_float(
+            info.get("lastPrice"),
+            info.get("last"),
+            info.get("ltp"),
+        )
+
+        previous_close = _first_float(
+            info.get("previousClose"),
+            info.get("prevClose"),
+            info.get("previous_close"),
+        )
+
+        timestamp = payload.get("timestamp")
+
+    if price is None:
         raise LiveMarketDataError(
-            "No option-chain rows found for "
-            f"expiry {expiry}."
+            "NSE NIFTY quote did not contain a valid price."
         )
 
-    eligible.sort(
-        key=lambda item: (
-            abs(item[0] - nifty_price),
-            item[0],
+    if previous_close is None:
+        previous_close = price
+
+    return NiftyQuote(
+        timestamp=_parse_nse_datetime(
+            timestamp
+        ),
+        price=price,
+        previous_close=previous_close,
+    )
+
+
+def fetch_nifty_quote() -> NiftyQuote:
+    """
+    Fetch the current NIFTY 50 quote.
+
+    Uses NSE's equity index quote endpoint instead of the
+    retired/invalid quote endpoint previously used by the runner.
+    """
+
+    session = _session()
+
+    urls = (
+        (
+            f"{NSE_BASE_URL}/api/equity-stockIndices",
+            {
+                "index": "NIFTY 50",
+            },
+        ),
+        (
+            f"{NSE_BASE_URL}/api/allIndices",
+            None,
+        ),
+    )
+
+    last_error: Exception | None = None
+
+    for url, params in urls:
+        try:
+            payload = _get_json(
+                session,
+                url,
+                params=params,
+            )
+
+            if "allIndices" in payload:
+                indices = payload.get(
+                    "data",
+                    []
+                )
+
+                if not isinstance(
+                    indices,
+                    list,
+                ):
+                    continue
+
+                match = None
+
+                for item in indices:
+                    if not isinstance(
+                        item,
+                        dict,
+                    ):
+                        continue
+
+                    name = str(
+                        item.get("index")
+                        or item.get("indexSymbol")
+                        or ""
+                    ).strip().upper()
+
+                    if name in {
+                        "NIFTY 50",
+                        "NIFTY",
+                    }:
+                        match = item
+                        break
+
+                if match is None:
+                    continue
+
+                price = _first_float(
+                    match.get("last"),
+                    match.get("lastPrice"),
+                    match.get("ltp"),
+                )
+
+                previous_close = _first_float(
+                    match.get("previousClose"),
+                    match.get("prevClose"),
+                )
+
+                if price is None:
+                    continue
+
+                if previous_close is None:
+                    previous_close = price
+
+                return NiftyQuote(
+                    timestamp=_parse_nse_datetime(
+                        match.get("timeVal")
+                        or match.get("timestamp")
+                    ),
+                    price=price,
+                    previous_close=previous_close,
+                )
+
+            return _extract_quote_from_nse_payload(
+                payload
+            )
+
+        except (
+            LiveMarketDataError,
+            requests.RequestException,
+        ) as exc:
+            last_error = exc
+
+    raise LiveMarketDataError(
+        "Unable to fetch NIFTY 50 quote from NSE."
+        + (
+            f" Last error: {last_error}"
+            if last_error
+            else ""
         )
     )
 
-    return eligible[
-        : 1 + (2 * strikes_each_side)
+
+def _normalise_chain_records(
+    payload: dict[str, Any],
+) -> tuple[
+    float,
+    tuple[date, ...],
+    tuple[dict[str, Any], ...],
+]:
+    records: list[dict[str, Any]] = []
+
+    data = payload.get("records", {})
+
+    if not isinstance(data, dict):
+        raise LiveMarketDataError(
+            "NSE option-chain payload is invalid."
+        )
+
+    underlying = _first_float(
+        data.get("underlyingValue"),
+    )
+
+    if underlying is None:
+        underlying = 0.0
+
+    raw_expiries = data.get(
+        "expiryDates",
+        [],
+    )
+
+    expiries: list[date] = []
+
+    if isinstance(
+        raw_expiries,
+        list,
+    ):
+        for value in raw_expiries:
+            parsed = _parse_expiry(value)
+
+            if parsed is not None:
+                expiries.append(parsed)
+
+    raw_data = data.get(
+        "data",
+        [],
+    )
+
+    if not isinstance(
+        raw_data,
+        list,
+    ):
+        raw_data = []
+
+    for item in raw_data:
+        if not isinstance(
+            item,
+            dict,
+        ):
+            continue
+
+        strike = _first_float(
+            item.get("strikePrice"),
+        )
+
+        expiry = _parse_expiry(
+            item.get("expiryDate")
+        )
+
+        if strike is None or expiry is None:
+            continue
+
+        records.append(
+            {
+                "strike": strike,
+                "expiry": expiry,
+                "CE": item.get("CE"),
+                "PE": item.get("PE"),
+            }
+        )
+
+    return (
+        underlying,
+        tuple(sorted(set(expiries))),
+        tuple(records),
+    )
+
+
+def fetch_nifty_option_chain() -> NiftyOptionChain:
+    session = _session()
+
+    payload = _get_json(
+        session,
+        f"{NSE_BASE_URL}/api/option-chain-indices",
+        params={
+            "symbol": "NIFTY",
+        },
+    )
+
+    (
+        underlying,
+        expiries,
+        records,
+    ) = _normalise_chain_records(
+        payload
+    )
+
+    if not records:
+        raise LiveMarketDataError(
+            "NSE returned no NIFTY option-chain records."
+        )
+
+    return NiftyOptionChain(
+        timestamp=datetime.now(),
+        underlying_value=underlying,
+        expiry_dates=expiries,
+        records=records,
+    )
+
+
+def nearest_nifty_expiry(
+    chain: NiftyOptionChain,
+    today: date | None = None,
+) -> date:
+    current_date = (
+        today
+        if today is not None
+        else date.today()
+    )
+
+    future_expiries = [
+        expiry
+        for expiry in chain.expiry_dates
+        if expiry >= current_date
     ]
+
+    if not future_expiries:
+        raise LiveMarketDataError(
+            "NSE option chain contains no future NIFTY expiry."
+        )
+
+    return min(future_expiries)
 
 
 def build_option_chain_snapshot(
-    option_chain_payload: Mapping[str, Any],
+    payload: dict[str, Any],
     nifty_price: float,
     expiry: date,
-    strikes_each_side: int = 5,
+    strikes_each_side: int = 2,
 ) -> OptionChainSnapshot:
-    if nifty_price <= 0:
-        raise ValueError(
-            "nifty_price must be positive."
+    (
+        underlying,
+        _expiries,
+        records,
+    ) = _normalise_chain_records(
+        payload
+    )
+
+    reference_price = (
+        nifty_price
+        if nifty_price > 0
+        else underlying
+    )
+
+    strikes = sorted(
+        {
+            float(record["strike"])
+            for record in records
+            if record["expiry"] == expiry
+        }
+    )
+
+    if not strikes:
+        raise LiveMarketDataError(
+            "No strikes found for requested expiry."
         )
 
-    if strikes_each_side < 0:
-        raise ValueError(
-            "strikes_each_side cannot be negative."
-        )
+    atm_index = min(
+        range(len(strikes)),
+        key=lambda index: abs(
+            strikes[index] - reference_price
+        ),
+    )
 
-    selected = _nearest_strikes(
-        _rows(option_chain_payload),
-        nifty_price,
-        expiry,
-        strikes_each_side,
+    low = max(
+        0,
+        atm_index - strikes_each_side,
+    )
+
+    high = min(
+        len(strikes),
+        atm_index + strikes_each_side + 1,
+    )
+
+    selected = set(
+        strikes[low:high]
     )
 
     ce_oi = 0.0
@@ -529,53 +576,46 @@ def build_option_chain_snapshot(
     ce_volume = 0.0
     pe_volume = 0.0
 
-    for _, row in selected:
-        ce = row.get("CE")
-        pe = row.get("PE")
+    for record in records:
+        if (
+            record["expiry"] != expiry
+            or float(record["strike"])
+            not in selected
+        ):
+            continue
 
-        if isinstance(ce, Mapping):
-            ce_oi += _number(
-                ce.get("openInterest", 0),
-                "CE open interest",
-            )
+        ce = record.get("CE") or {}
+        pe = record.get("PE") or {}
 
-            ce_oi_change += _number(
-                ce.get(
-                    "changeinOpenInterest",
-                    0,
-                ),
-                "CE OI change",
-            )
+        if isinstance(ce, dict):
+            ce_oi += _first_float(
+                ce.get("openInterest")
+            ) or 0.0
 
-            ce_volume += _number(
-                ce.get(
-                    "totalTradedVolume",
-                    0,
-                ),
-                "CE volume",
-            )
+            ce_oi_change += _first_float(
+                ce.get("changeinOpenInterest"),
+                ce.get("changeInOpenInterest"),
+            ) or 0.0
 
-        if isinstance(pe, Mapping):
-            pe_oi += _number(
-                pe.get("openInterest", 0),
-                "PE open interest",
-            )
+            ce_volume += _first_float(
+                ce.get("totalTradedVolume"),
+                ce.get("volume"),
+            ) or 0.0
 
-            pe_oi_change += _number(
-                pe.get(
-                    "changeinOpenInterest",
-                    0,
-                ),
-                "PE OI change",
-            )
+        if isinstance(pe, dict):
+            pe_oi += _first_float(
+                pe.get("openInterest")
+            ) or 0.0
 
-            pe_volume += _number(
-                pe.get(
-                    "totalTradedVolume",
-                    0,
-                ),
-                "PE volume",
-            )
+            pe_oi_change += _first_float(
+                pe.get("changeinOpenInterest"),
+                pe.get("changeInOpenInterest"),
+            ) or 0.0
+
+            pe_volume += _first_float(
+                pe.get("totalTradedVolume"),
+                pe.get("volume"),
+            ) or 0.0
 
     return OptionChainSnapshot(
         ce_oi=ce_oi,
@@ -588,76 +628,63 @@ def build_option_chain_snapshot(
 
 
 def find_option_quote(
-    option_chain_payload: Mapping[str, Any],
+    payload: dict[str, Any],
     expiry: date,
     strike: float,
     option_type: str,
-) -> LiveOptionQuote:
-    normalized_type = option_type.upper()
+):
+    option_type = option_type.upper()
 
-    if normalized_type not in {"CE", "PE"}:
+    if option_type not in {
+        "CE",
+        "PE",
+    }:
         raise ValueError(
             "option_type must be CE or PE."
         )
 
-    records = option_chain_payload.get(
-        "records",
-        {},
+    _underlying, _expiries, records = (
+        _normalise_chain_records(
+            payload
+        )
     )
 
-    timestamp = (
-        records.get("timestamp")
-        if isinstance(records, Mapping)
-        else None
-    )
-
-    for row in _rows(option_chain_payload):
-        if _row_expiry(row) != expiry:
+    for record in records:
+        if record["expiry"] != expiry:
             continue
 
-        try:
-            row_strike = float(
-                row.get("strikePrice")
-            )
-        except (TypeError, ValueError):
+        if float(record["strike"]) != float(strike):
             continue
 
-        if row_strike != float(strike):
-            continue
-
-        leg = row.get(
-            normalized_type
+        raw_quote = record.get(
+            option_type
         )
 
         if not isinstance(
-            leg,
-            Mapping,
+            raw_quote,
+            dict,
         ):
-            continue
+            raise LiveMarketDataError(
+                f"No {option_type} quote available."
+            )
 
-        price = (
-            leg.get("lastPrice")
-            or leg.get("close")
+        quote = dict(raw_quote)
+
+        quote["timestamp"] = (
+            quote.get("timestamp")
+            or quote.get("lastUpdateTime")
+            or datetime.now().isoformat()
         )
 
-        if price is None:
-            continue
+        quote["strike"] = strike
+        quote["expiry"] = expiry
+        quote["optionType"] = option_type
 
         return normalize_option_quote(
-            {
-                "timestamp": (
-                    leg.get("timestamp")
-                    or timestamp
-                    or datetime.now()
-                ),
-                "expiry": expiry,
-                "strike": strike,
-                "option_type": normalized_type,
-                "price": price,
-            }
+            quote
         )
 
     raise LiveMarketDataError(
-        "Requested NIFTY option quote was not "
-        "found in the live option chain."
+        f"No {option_type} quote found for "
+        f"{strike} / {expiry}."
     )
