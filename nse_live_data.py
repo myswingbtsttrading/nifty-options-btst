@@ -172,6 +172,9 @@ def _parse_nse_datetime(
 def _parse_expiry(
     value: Any,
 ) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+
     if isinstance(value, date):
         return value
 
@@ -250,22 +253,13 @@ def _extract_quote_from_nse_payload(
         previous_close = price
 
     return NiftyQuote(
-        timestamp=_parse_nse_datetime(
-            timestamp
-        ),
+        timestamp=_parse_nse_datetime(timestamp),
         price=price,
         previous_close=previous_close,
     )
 
 
 def fetch_nifty_quote() -> NiftyQuote:
-    """
-    Fetch the current NIFTY 50 quote.
-
-    Uses NSE's equity index quote endpoint instead of the
-    retired/invalid quote endpoint previously used by the runner.
-    """
-
     session = _session()
 
     urls = (
@@ -294,7 +288,7 @@ def fetch_nifty_quote() -> NiftyQuote:
             if "allIndices" in payload:
                 indices = payload.get(
                     "data",
-                    []
+                    [],
                 )
 
                 if not isinstance(
@@ -489,6 +483,26 @@ def fetch_nifty_option_chain() -> NiftyOptionChain:
         expiry_dates=expiries,
         records=records,
     )
+
+
+def available_nifty_expiries(
+    payload_or_chain: dict[str, Any] | NiftyOptionChain,
+) -> tuple[date, ...]:
+    if isinstance(
+        payload_or_chain,
+        NiftyOptionChain,
+    ):
+        return payload_or_chain.expiry_dates
+
+    (
+        _underlying,
+        expiries,
+        _records,
+    ) = _normalise_chain_records(
+        payload_or_chain
+    )
+
+    return expiries
 
 
 def nearest_nifty_expiry(
