@@ -43,10 +43,22 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add data/live_btst_signal.json
+          STATE_FILE="data/live_btst_signal.json"
+
+          if [ -f "$STATE_FILE" ]; then
+            echo "BTST state file exists. Staging new/updated position state."
+            git add "$STATE_FILE"
+
+          elif git ls-files --error-unmatch "$STATE_FILE" >/dev/null 2>&1; then
+            echo "BTST state file was removed because there is no active BUY."
+            git add -u -- "$STATE_FILE"
+
+          else
+            echo "No BTST position state exists. Nothing to persist."
+          fi
 
           if git diff --cached --quiet; then
-            echo "No BTST position state to commit."
+            echo "No BTST state changes to commit."
           else
             git commit -m "Persist BTST position state"
             git push
