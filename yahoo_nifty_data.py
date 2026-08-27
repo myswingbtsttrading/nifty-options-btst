@@ -1,8 +1,11 @@
 """
 Yahoo Finance NIFTY data provider.
 
-Used as a fallback market-data source when NSE live data is
-unavailable or blocked.
+Provides both:
+- current NIFTY quote
+- historical NIFTY daily prices
+
+Used as a fallback when NSE live data is unavailable.
 """
 
 from __future__ import annotations
@@ -22,9 +25,6 @@ MIN_HISTORY_ROWS = 20
 
 
 def _normalise_timestamp(value: Any) -> datetime:
-    """
-    Convert Yahoo Finance timestamps into naive datetimes.
-    """
     if isinstance(value, datetime):
         result = value
     else:
@@ -48,17 +48,85 @@ def _normalise_timestamp(value: Any) -> datetime:
     return result
 
 
+def fetch_nifty_quote() -> float:
+    """
+    Fetch the latest NIFTY 50 price from Yahoo Finance.
+
+    Returns:
+        Current NIFTY price as a positive float.
+    """
+
+    try:
+        ticker = yf.Ticker(
+            YAHOO_SYMBOL
+        )
+
+        history = ticker.history(
+            period="1d",
+            interval="1m",
+            auto_adjust=False,
+            prepost=False,
+        )
+
+        if history is not None and not history.empty:
+            if "Close" in history.columns:
+                closes = history["Close"].dropna()
+
+                if not closes.empty:
+                    price = float(
+                        closes.iloc[-1]
+                    )
+
+                    if price > 0:
+                        return price
+
+        # Fallback for environments where the 1-minute
+        # endpoint is unavailable.
+        fast_info = getattr(
+            ticker,
+            "fast_info",
+            None,
+        )
+
+        if fast_info is not None:
+            for key in (
+                "last_price",
+                "regularMarketPrice",
+            ):
+                try:
+                    value = fast_info.get(
+                        key
+                    )
+
+                    if value is None:
+                        continue
+
+                    price = float(value)
+
+                    if price > 0:
+                        return price
+                except (
+                    AttributeError,
+                    TypeError,
+                    ValueError,
+                ):
+                    continue
+
+    except Exception as exc:
+        raise LiveMarketDataError(
+            f"Yahoo Finance NIFTY quote request failed: {exc}"
+        ) from exc
+
+    raise LiveMarketDataError(
+        "Yahoo Finance returned no valid NIFTY quote."
+    )
+
+
 def load_nifty_history(
     days: int = 120,
 ) -> list[dict[str, Any]]:
     """
     Load daily NIFTY history required by the live signal engine.
-
-    Yahoo can occasionally return fewer rows than the requested
-    calendar period because markets are closed on weekends and
-    holidays. Therefore validation is based on having enough
-    usable observations rather than requiring an arbitrary
-    50-row minimum.
     """
 
     if days < MIN_HISTORY_DAYS:
@@ -102,7 +170,10 @@ def load_nifty_history(
 
         try:
             price = float(close)
-        except (TypeError, ValueError):
+        except (
+            TypeError,
+            ValueError,
+        ):
             continue
 
         if price <= 0:
@@ -135,7 +206,7 @@ def fetch_nifty_history(
     days: int = 120,
 ) -> list[dict[str, Any]]:
     """
-    Backward-compatible alias for load_nifty_history().
+    Backward-compatible history alias.
     """
     return load_nifty_history(
         days=days
@@ -146,6 +217,7 @@ __all__ = [
     "YAHOO_SYMBOL",
     "MIN_HISTORY_DAYS",
     "MIN_HISTORY_ROWS",
+    "fetch_nifty_quote",
     "load_nifty_history",
     "fetch_nifty_history",
 ]
