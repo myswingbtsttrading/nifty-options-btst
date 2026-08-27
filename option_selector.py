@@ -77,7 +77,9 @@ def select_strike(
     strike_interval: int = 50,
 ) -> int:
     option_type = _validate_option_type(option_type)
-    selection_mode = _validate_selection_mode(selection_mode)
+    selection_mode = _validate_selection_mode(
+        selection_mode
+    )
 
     atm = select_atm_strike(
         nifty_price=nifty_price,
@@ -90,6 +92,7 @@ def select_strike(
     if option_type == "CE":
         if selection_mode == "ITM":
             return atm - strike_interval
+
         return atm + strike_interval
 
     if selection_mode == "ITM":
@@ -121,7 +124,9 @@ def select_contract(
     strike_interval: int = 50,
 ) -> OptionContract:
     option_type = _validate_option_type(option_type)
-    selection_mode = _validate_selection_mode(selection_mode)
+    selection_mode = _validate_selection_mode(
+        selection_mode
+    )
 
     if not isinstance(expiry, date):
         raise OptionSelectionError(
@@ -172,63 +177,172 @@ def _parse_expiry(value: Any) -> date | None:
     return None
 
 
-def _available_contracts(
-    payload: Mapping[str, Any],
-    expiry: date,
-) -> list[OptionContract]:
-    records = payload.get("records", {})
+def _extract_rows(
+    payload: Any,
+) -> list[Mapping[str, Any]]:
+    """
+    Accept both:
 
-    if not isinstance(records, Mapping):
+    1. Raw NSE option-chain dictionaries.
+    2. Normalized NiftyOptionChain objects.
+
+    This keeps option selection compatible with the
+    normalized live-data architecture.
+    """
+
+    # Normalized NiftyOptionChain.
+    #
+    # Avoid importing NiftyOptionChain here because
+    # nse_live_data imports shared market-data utilities
+    # and we do not need a runtime circular dependency.
+    normalized_records = getattr(
+        payload,
+        "records",
+        None,
+    )
+
+    if normalized_records is not None:
+        if not isinstance(
+            normalized_records,
+            (list, tuple),
+        ):
+            raise OptionSelectionError(
+                "Normalized option-chain records are invalid."
+            )
+
+        rows: list[Mapping[str, Any]] = []
+
+        for record in normalized_records:
+            if not isinstance(
+                record,
+                Mapping,
+            ):
+                continue
+
+            rows.append(
+                {
+                    "strikePrice": record.get(
+                        "strike",
+                    ),
+                    "expiryDate": record.get(
+                        "expiry",
+                    ),
+                    "CE": record.get("CE"),
+                    "PE": record.get("PE"),
+                }
+            )
+
+        return rows
+
+    # Raw NSE payload.
+    if not isinstance(
+        payload,
+        Mapping,
+    ):
+        raise OptionSelectionError(
+            "Option-chain payload is invalid."
+        )
+
+    records = payload.get(
+        "records",
+        {},
+    )
+
+    if not isinstance(
+        records,
+        Mapping,
+    ):
         raise OptionSelectionError(
             "Option-chain records are invalid."
         )
 
-    rows = records.get("data", [])
+    rows = records.get(
+        "data",
+        [],
+    )
 
-    if not isinstance(rows, list):
+    if not isinstance(
+        rows,
+        list,
+    ):
         raise OptionSelectionError(
             "Option-chain data is invalid."
         )
 
+    return [
+        row
+        for row in rows
+        if isinstance(
+            row,
+            Mapping,
+        )
+    ]
+
+
+def _available_contracts(
+    payload: Any,
+    expiry: date,
+) -> list[OptionContract]:
+    rows = _extract_rows(
+        payload
+    )
+
     contracts: list[OptionContract] = []
 
     for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-
         row_expiry = _parse_expiry(
             row.get("expiryDate")
+            or row.get("expiry")
         )
 
         if row_expiry != expiry:
             continue
 
         try:
+            raw_strike = (
+                row.get("strikePrice")
+                if row.get("strikePrice") is not None
+                else row.get("strike")
+            )
+
             strike = int(
-                float(
-                    row["strikePrice"]
-                )
+                float(raw_strike)
             )
         except (
-            KeyError,
             TypeError,
             ValueError,
         ):
             continue
 
         for option_type in ("CE", "PE"):
-            leg = row.get(option_type)
+            leg = row.get(
+                option_type
+            )
 
-            if not isinstance(leg, Mapping):
+            if not isinstance(
+                leg,
+                Mapping,
+            ):
                 continue
 
-            last_price = leg.get("lastPrice")
+            last_price = leg.get(
+                "lastPrice"
+            )
 
             if last_price is None:
-                last_price = leg.get("close")
+                last_price = leg.get(
+                    "close"
+                )
+
+            if last_price is None:
+                last_price = leg.get(
+                    "ltp"
+                )
 
             try:
-                price = float(last_price)
+                price = float(
+                    last_price
+                )
             except (
                 TypeError,
                 ValueError,
@@ -251,7 +365,7 @@ def _available_contracts(
 
 
 def select_live_contract(
-    option_chain_payload: Mapping[str, Any],
+    option_chain_payload: Any,
     nifty_price: float,
     expiry: date,
     option_type: str,
@@ -261,7 +375,11 @@ def select_live_contract(
     """
     Select a requested contract only if it exists in the
     supplied live option-chain payload and has a valid price.
+
+    Supports both raw NSE payloads and normalized
+    NiftyOptionChain objects.
     """
+
     requested = select_contract(
         nifty_price=nifty_price,
         expiry=expiry,
@@ -277,9 +395,12 @@ def select_live_contract(
 
     for contract in available:
         if (
-            contract.strike == requested.strike
-            and contract.option_type == requested.option_type
-            and contract.expiry == requested.expiry
+            contract.strike
+            == requested.strike
+            and contract.option_type
+            == requested.option_type
+            and contract.expiry
+            == requested.expiry
         ):
             return OptionContract(
                 expiry=contract.expiry,
