@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import date, datetime
 
 import main
 
@@ -130,6 +130,13 @@ def test_run_915_fetches_actual_option_premium_and_sends_alert(
 
     class FakeOptionQuote:
         price = 120.0
+        timestamp = datetime(
+            2026,
+            8,
+            28,
+            9,
+            15,
+        )
 
     class FakeChain:
         pass
@@ -146,21 +153,6 @@ def test_run_915_fetches_actual_option_premium_and_sends_alert(
         main,
         "find_option_quote",
         lambda **kwargs: FakeOptionQuote(),
-    )
-
-    class FakeNiftyQuote:
-        timestamp = datetime(
-            2026,
-            8,
-            28,
-            9,
-            15,
-        )
-
-    monkeypatch.setattr(
-        main,
-        "fetch_nifty_quote",
-        lambda: FakeNiftyQuote(),
     )
 
     monkeypatch.setattr(
