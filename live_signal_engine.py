@@ -47,7 +47,7 @@ def _validate_prices(
             "to calculate EMA20 and EMA50."
         )
 
-    result = []
+    result: list[float] = []
 
     for price in prices:
         value = float(price)
@@ -94,11 +94,11 @@ def _rsi(
     if len(prices) < period + 1:
         raise LiveMarketDataError(
             f"At least {period + 1} prices are required "
-            f"for RSI."
+            "for RSI."
         )
 
-    gains = []
-    losses = []
+    gains: list[float] = []
+    losses: list[float] = []
 
     for previous, current in zip(
         prices[:-1],
@@ -109,6 +109,7 @@ def _rsi(
         gains.append(
             max(change, 0.0)
         )
+
         losses.append(
             max(-change, 0.0)
         )
@@ -178,9 +179,7 @@ def _extract_close(
 def _extract_timestamp(
     row: Mapping[str, Any],
 ) -> Optional[datetime]:
-    value = row.get(
-        "timestamp"
-    )
+    value = row.get("timestamp")
 
     if isinstance(value, datetime):
         return value
@@ -249,14 +248,11 @@ def build_live_signal(
     """
     Build the complete live BTST signal.
 
-    Underlying NIFTY:
+    NIFTY quote:
         Yahoo Finance
 
     Option chain:
         NSE
-
-    Signal:
-        NIFTY indicators + NSE option-chain confirmation
 
     Contract:
         NSE option-chain contract
@@ -282,13 +278,11 @@ def build_live_signal(
         previous_close=quote.previous_close,
     )
 
-    chain_snapshot = (
-        build_option_chain_snapshot(
-            option_chain_payload=option_chain,
-            nifty_price=quote.price,
-            expiry=expiry,
-            strikes_each_side=5,
-        )
+    chain_snapshot = build_option_chain_snapshot(
+        option_chain_payload=option_chain,
+        nifty_price=quote.price,
+        expiry=expiry,
+        strikes_each_side=5,
     )
 
     nifty_signal = generate_signal(
@@ -304,10 +298,10 @@ def build_live_signal(
 
     option_type = nifty_signal.direction
 
-    if nifty_signal.decision != "BUY":
+    if option_type not in {"CE", "PE"}:
         option_type = (
             "CE"
-            if nifty_signal.direction == "CE"
+            if nifty_signal.direction == "BUY"
             else "PE"
         )
 
@@ -320,7 +314,7 @@ def build_live_signal(
     )
 
     option_quote = find_option_quote(
-        option_chain_payload=option_chain,
+        option_chain,
         expiry=expiry,
         strike=contract.strike,
         option_type=contract.option_type,
