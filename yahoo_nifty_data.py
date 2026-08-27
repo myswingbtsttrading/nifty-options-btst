@@ -1,16 +1,17 @@
 """
 Yahoo Finance NIFTY data provider.
 
-Provides both:
+Provides:
 - current NIFTY quote
-- historical NIFTY daily prices
+- daily NIFTY historical prices
 
-Used as a fallback when NSE live data is unavailable.
+Used as the Yahoo Finance fallback when NSE live data is unavailable.
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import yfinance as yf
@@ -21,10 +22,23 @@ from live_market_data import LiveMarketDataError
 YAHOO_SYMBOL = "^NSEI"
 
 MIN_HISTORY_DAYS = 60
-MIN_HISTORY_ROWS = 20
+MIN_HISTORY_ROWS = 1
 
 
-def _normalise_timestamp(value: Any) -> datetime:
+@dataclass(frozen=True)
+class NiftyQuote:
+    """
+    Normalized current NIFTY quote.
+    """
+
+    timestamp: datetime
+    price: float
+    previous_close: float | None = None
+
+
+def _normalise_timestamp(
+    value: Any,
+) -> datetime:
     if isinstance(value, datetime):
         result = value
     else:
@@ -48,40 +62,14 @@ def _normalise_timestamp(value: Any) -> datetime:
     return result
 
 
-def fetch_nifty_quote() -> float:
+def _extract_previous_close(
+    ticker: Any,
+) -> float | None:
     """
-    Fetch the latest NIFTY 50 price from Yahoo Finance.
-
-    Returns:
-        Current NIFTY price as a positive float.
+    Extract the previous close when Yahoo exposes it.
     """
 
     try:
-        ticker = yf.Ticker(
-            YAHOO_SYMBOL
-        )
-
-        history = ticker.history(
-            period="1d",
-            interval="1m",
-            auto_adjust=False,
-            prepost=False,
-        )
-
-        if history is not None and not history.empty:
-            if "Close" in history.columns:
-                closes = history["Close"].dropna()
-
-                if not closes.empty:
-                    price = float(
-                        closes.iloc[-1]
-                    )
-
-                    if price > 0:
-                        return price
-
-        # Fallback for environments where the 1-minute
-        # endpoint is unavailable.
         fast_info = getattr(
             ticker,
             "fast_info",
@@ -90,21 +78,20 @@ def fetch_nifty_quote() -> float:
 
         if fast_info is not None:
             for key in (
-                "last_price",
-                "regularMarketPrice",
+                "previous_close",
+                "regularMarketPreviousClose",
             ):
                 try:
-                    value = fast_info.get(
-                        key
-                    )
+                    value = fast_info.get(key)
 
                     if value is None:
                         continue
 
-                    price = float(value)
+                    value = float(value)
 
-                    if price > 0:
-                        return price
+                    if value > 0:
+                        return value
+
                 except (
                     AttributeError,
                     TypeError,
@@ -112,13 +99,78 @@ def fetch_nifty_quote() -> float:
                 ):
                     continue
 
+    except Exception:
+        pass
+
+    return None
+
+
+def fetch_nifty_quote() -> NiftyQuote:
+    """
+    Fetch the latest NIFTY 50 quote from Yahoo Finance.
+    """
+
+    try:
+        ticker = yf.Ticker(
+            YAHOO_SYMBOL
+        )
+
+        intraday = ticker.history(
+            period="1d",
+            interval="1m",
+            auto_adjust=False,
+            prepost=False,
+        )
+
     except Exception as exc:
         raise LiveMarketDataError(
             f"Yahoo Finance NIFTY quote request failed: {exc}"
         ) from exc
 
-    raise LiveMarketDataError(
-        "Yahoo Finance returned no valid NIFTY quote."
+    if intraday is None or intraday.empty:
+        raise LiveMarketDataError(
+            "Yahoo Finance returned no intraday NIFTY data."
+        )
+
+    if "Close" not in intraday.columns:
+        raise LiveMarketDataError(
+            "Yahoo Finance intraday NIFTY data has no Close column."
+        )
+
+    valid = intraday["Close"].dropna()
+
+    if valid.empty:
+        raise LiveMarketDataError(
+            "Yahoo Finance returned no intraday NIFTY prices."
+        )
+
+    try:
+        price = float(
+            valid.iloc[-1]
+        )
+    except (
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise LiveMarketDataError(
+            "Yahoo Finance returned an invalid NIFTY price."
+        ) from exc
+
+    if price <= 0:
+        raise LiveMarketDataError(
+            "Yahoo Finance returned an invalid NIFTY price."
+        )
+
+    timestamp = _normalise_timestamp(
+        intraday.index[-1]
+    )
+
+    return NiftyQuote(
+        timestamp=timestamp,
+        price=price,
+        previous_close=_extract_previous_close(
+            ticker
+        ),
     )
 
 
@@ -145,6 +197,7 @@ def load_nifty_history(
             auto_adjust=False,
             prepost=False,
         )
+
     except Exception as exc:
         raise LiveMarketDataError(
             f"Yahoo Finance NIFTY history request failed: {exc}"
@@ -208,6 +261,7 @@ def fetch_nifty_history(
     """
     Backward-compatible history alias.
     """
+
     return load_nifty_history(
         days=days
     )
@@ -215,8 +269,7 @@ def fetch_nifty_history(
 
 __all__ = [
     "YAHOO_SYMBOL",
-    "MIN_HISTORY_DAYS",
-    "MIN_HISTORY_ROWS",
+    "NiftyQuote",
     "fetch_nifty_quote",
     "load_nifty_history",
     "fetch_nifty_history",
