@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime, timedelta
+from datetime import date
 from pathlib import Path
-from typing import Any
 
 from live_market_data import LiveMarketDataError
 from live_signal_engine import build_live_signal
 from notifier import send_alert
 from nse_live_data import (
     fetch_nifty_option_chain,
-    fetch_nifty_quote,
     nearest_nifty_expiry,
 )
+from yahoo_nifty_data import (
+    fetch_nifty_quote,
+    load_nifty_history,
+)
+
 
 DATA_DIR = Path("data")
 STATE_FILE = DATA_DIR / "live_btst_signal.json"
@@ -21,88 +24,27 @@ STATE_FILE = DATA_DIR / "live_btst_signal.json"
 def _load_historical_nifty_rows(
     current_price: float,
     previous_close: float,
-) -> list[dict[str, Any]]:
+):
     """
-    Build recent NIFTY history for the live signal engine.
+    Load NIFTY history from Yahoo Finance.
 
-    NSE supplies the current NIFTY price. Yahoo Finance supplies
-    the recent daily history required by the indicator engine.
-    The current NSE price is appended as the latest observation.
+    The current Yahoo NIFTY quote is appended to the daily
+    historical series so the indicator engine evaluates the
+    current 3 PM market price.
     """
-    import requests
 
-    now = datetime.now()
-    start = now - timedelta(days=120)
-
-    response = requests.get(
-        "https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI",
-        params={
-            "period1": int(start.timestamp()),
-            "period2": int(
-                (now + timedelta(days=1)).timestamp()
-            ),
-            "interval": "1d",
-            "events": "history",
-        },
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 "
-                "(Linux; Android 10) "
-                "AppleWebKit/537.36 "
-                "Chrome/151.0 Mobile Safari/537.36"
-            )
-        },
-        timeout=30,
+    rows = load_nifty_history(
+        days=120
     )
 
-    response.raise_for_status()
-
-    payload = response.json()
-
-    result = payload.get("chart", {}).get("result")
-
-    if not result:
+    if not rows:
         raise LiveMarketDataError(
-            "Yahoo Finance returned no NIFTY historical data."
-        )
-
-    chart = result[0]
-
-    timestamps = chart.get("timestamp", [])
-
-    closes = (
-        chart.get("indicators", {})
-        .get("quote", [{}])[0]
-        .get("close", [])
-    )
-
-    rows: list[dict[str, Any]] = []
-
-    for timestamp, close in zip(
-        timestamps,
-        closes,
-    ):
-        if close is None:
-            continue
-
-        rows.append(
-            {
-                "timestamp": datetime.fromtimestamp(
-                    timestamp
-                ),
-                "close": float(close),
-            }
-        )
-
-    if len(rows) < 50:
-        raise LiveMarketDataError(
-            "Fewer than 50 valid NIFTY historical prices "
-            "were returned."
+            "Yahoo Finance returned no NIFTY historical rows."
         )
 
     rows.append(
         {
-            "timestamp": datetime.now(),
+            "timestamp": fetch_nifty_quote().timestamp,
             "close": float(current_price),
         }
     )
@@ -184,7 +126,9 @@ def run_3pm() -> None:
         today=date.today(),
     )
 
-    message = _format_signal_message(result)
+    message = _format_signal_message(
+        result
+    )
 
     send_alert(message)
 
@@ -205,6 +149,14 @@ def run_3pm() -> None:
 def run_smoke() -> None:
     print(
         "NIFTY Options BTST production runner initialized."
+    )
+
+    print(
+        "Underlying provider: Yahoo Finance."
+    )
+
+    print(
+        "Option-chain provider: NSE."
     )
 
     print(
