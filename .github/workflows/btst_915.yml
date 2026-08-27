@@ -1,0 +1,55 @@
+name: NIFTY BTST 9:15 AM Exit
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # 09:15 IST = 03:45 UTC
+    - cron: "45 3 * * 1-5"
+
+permissions:
+  contents: write
+
+jobs:
+  btst-exit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run test suite
+        run: python -m pytest -q
+
+      - name: Generate 9:15 AM SELL alert
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python main.py --mode 915
+
+      - name: Remove closed BTST position state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if [ -f data/live_btst_signal.json ]; then
+            git add -u data/live_btst_signal.json
+          fi
+
+          if git diff --cached --quiet; then
+            echo "No position state to remove."
+          else
+            git commit -m "Close BTST position state"
+            git push
+          fi
