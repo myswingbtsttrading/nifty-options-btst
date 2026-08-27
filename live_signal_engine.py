@@ -5,16 +5,14 @@ from datetime import date, datetime
 from typing import Any, Mapping, Optional
 
 from option_selector import select_live_contract
-
 from live_market_data import LiveMarketDataError
 from nse_live_data import (
     build_option_chain_snapshot,
     fetch_nifty_option_chain,
-    fetch_nifty_quote,
     find_option_quote,
     nearest_nifty_expiry,
 )
-from option_selector import select_atm_contract
+from yahoo_nifty_data import fetch_nifty_quote
 from option_strategy import NiftySignal, generate_signal
 from signal_builder import (
     BTSTSignal,
@@ -249,31 +247,25 @@ def build_live_signal(
     today: Optional[date] = None,
 ) -> LiveSignalResult:
     """
-    Build the complete live BTST signal from the
-    current NIFTY market snapshot.
+    Build the complete live BTST signal.
 
-    Flow:
+    Underlying NIFTY:
+        Yahoo Finance
 
-    historical NIFTY prices
-        ↓
-    EMA20 / EMA50 / RSI
-        ↓
-    live NIFTY quote
-        ↓
-    live option chain
-        ↓
-    option-chain confirmation
-        ↓
-    CE/PE selection
-        ↓
-    risk manager
-        ↓
-    BTSTSignal
+    Option chain:
+        NSE
+
+    Signal:
+        NIFTY indicators + NSE option-chain confirmation
+
+    Contract:
+        NSE option-chain contract
+
+    Risk:
+        BTST risk manager
     """
 
-    quote = fetch_nifty_quote(
-        session=session
-    )
+    quote = fetch_nifty_quote()
 
     option_chain = fetch_nifty_option_chain(
         session=session
@@ -320,12 +312,12 @@ def build_live_signal(
         )
 
     contract = select_live_contract(
-    option_chain_payload=option_chain,
-    nifty_price=quote.price,
-    expiry=expiry,
-    option_type=option_type,
-    selection_mode="ATM",
-)
+        option_chain_payload=option_chain,
+        nifty_price=quote.price,
+        expiry=expiry,
+        option_type=option_type,
+        selection_mode="ATM",
+    )
 
     option_quote = find_option_quote(
         option_chain_payload=option_chain,
