@@ -1,42 +1,56 @@
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import date
 from pathlib import Path
-from typing import Any
 
 from live_market_data import LiveMarketDataError
 from live_signal_engine import build_live_signal
 from notifier import send_alert
-from yahoo_nifty_data import load_nifty_history
+from nse_live_data import (
+    fetch_nifty_option_chain,
+    find_option_quote,
+    nearest_nifty_expiry,
+)
+from yahoo_nifty_data import (
+    fetch_nifty_quote,
+    load_nifty_history,
+)
 
 
 DATA_DIR = Path("data")
 STATE_FILE = DATA_DIR / "live_btst_signal.json"
 
 
-def _load_historical_nifty_rows() -> list[dict[str, Any]]:
-    """
-    Load recent NIFTY daily history from Yahoo Finance.
-
-    Step 11 makes Yahoo Finance the primary NIFTY spot/history provider.
-    The live signal engine separately obtains the current quote from the
-    same Yahoo provider.
-    """
+def _load_historical_nifty_rows(
+    current_price: float,
+    previous_close: float,
+):
     rows = load_nifty_history(
         days=120
     )
 
-    if len(rows) < 50:
+    if not rows:
         raise LiveMarketDataError(
-            "Fewer than 50 valid NIFTY historical prices "
-            "were returned by Yahoo Finance."
+            "Yahoo Finance returned no NIFTY historical rows."
         )
+
+    quote = fetch_nifty_quote()
+
+    rows.append(
+        {
+            "timestamp": quote.timestamp,
+            "close": float(current_price),
+        }
+    )
 
     return rows
 
 
-def _format_signal_message(result) -> str:
+def _format_signal_message(
+    result,
+) -> str:
     signal = result.signal
     nifty_signal = result.nifty_signal
     indicators = result.indicators
@@ -81,22 +95,140 @@ def _format_signal_message(result) -> str:
         f"EMA50: {indicators.ema50:.2f}\n"
         f"RSI: {indicators.rsi:.1f}\n\n"
         "📌 BTST: Buy near 3 PM.\n"
-        "📌 Exit next trading morning according to "
-        "the exit plan/target."
+        "📌 Exit next trading morning."
+    )
+
+
+def _save_signal_state(
+    signal,
+) -> None:
+    DATA_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    STATE_FILE.write_text(
+        json.dumps(
+            signal.to_dict(),
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _load_signal_state() -> dict:
+    if not STATE_FILE.exists():
+        raise LiveMarketDataError(
+            "No BTST position state found. "
+            "There is no previous BUY signal to exit."
+        )
+
+    try:
+        payload = json.loads(
+            STATE_FILE.read_text(
+                encoding="utf-8"
+            )
+        )
+    except (
+        OSError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise LiveMarketDataError(
+            f"Unable to read BTST position state: {exc}"
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise LiveMarketDataError(
+            "BTST position state is invalid."
+        )
+
+    required = (
+        "decision",
+        "direction",
+        "expiry",
+        "strike",
+        "option_type",
+        "entry_price",
+        "quantity",
+        "lots",
+    )
+
+    missing = [
+        key
+        for key in required
+        if key not in payload
+    ]
+
+    if missing:
+        raise LiveMarketDataError(
+            "BTST position state is missing: "
+            + ", ".join(missing)
+        )
+
+    if str(payload["decision"]).upper() != "BUY":
+        raise LiveMarketDataError(
+            "Stored BTST position is not an active BUY."
+        )
+
+    return payload
+
+
+def _format_sell_message(
+    position: dict,
+    exit_price: float,
+    exit_timestamp,
+) -> str:
+    entry_price = float(
+        position["entry_price"]
+    )
+    quantity = int(
+        position["quantity"]
+    )
+
+    pnl = (
+        exit_price - entry_price
+    ) * quantity
+
+    pnl_pct = (
+        (
+            exit_price - entry_price
+        )
+        / entry_price
+        * 100.0
+    )
+
+    if pnl > 0:
+        result = "🟢 PROFIT"
+    elif pnl < 0:
+        result = "🔴 LOSS"
+    else:
+        result = "⚪ BREAKEVEN"
+
+    return (
+        "📤 NIFTY BTST SELL ALERT\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"{result}\n\n"
+        f"Option: {position['strike']} "
+        f"{position['option_type']}\n"
+        f"Expiry: {position['expiry']}\n"
+        f"Quantity: {quantity}\n"
+        f"Lots: {position['lots']}\n\n"
+        f"Entry Premium: ₹{entry_price:,.2f}\n"
+        f"Exit Premium: ₹{exit_price:,.2f}\n"
+        f"P/L: ₹{pnl:,.2f}\n"
+        f"P/L %: {pnl_pct:+.2f}%\n\n"
+        f"Exit Time: {exit_timestamp}\n"
+        "Position closed by the 9:15 AM BTST exit process."
     )
 
 
 def run_3pm() -> None:
-    """
-    Execute the complete 3 PM BTST signal pipeline.
+    quote = fetch_nifty_quote()
 
-    Data architecture:
-        NIFTY spot/history -> Yahoo Finance
-        option chain      -> NSE
-        signal            -> live signal engine
-        alert             -> Telegram
-    """
-    historical_rows = _load_historical_nifty_rows()
+    historical_rows = _load_historical_nifty_rows(
+        current_price=quote.price,
+        previous_close=quote.previous_close,
+    )
 
     result = build_live_signal(
         historical_rows=historical_rows,
@@ -109,38 +241,73 @@ def run_3pm() -> None:
         result
     )
 
+    send_alert(message)
+
+    if result.signal.decision == "BUY":
+        _save_signal_state(
+            result.signal
+        )
+
     print(message)
 
-    if result.signal.decision != "BUY":
-        print(
-            "No BUY signal. Telegram BUY alert not sent."
+
+def run_915() -> None:
+    position = _load_signal_state()
+
+    chain = fetch_nifty_option_chain()
+
+    expiry = date.fromisoformat(
+        str(position["expiry"])
+    )
+
+    option_quote = find_option_quote(
+        payload=chain,
+        expiry=expiry,
+        strike=float(
+            position["strike"]
+        ),
+        option_type=str(
+            position["option_type"]
+        ).upper(),
+    )
+
+    exit_price = float(
+        option_quote.price
+    )
+
+    if exit_price <= 0:
+        raise LiveMarketDataError(
+            "Current option premium must be positive."
         )
-        return
+
+    quote = fetch_nifty_quote()
+
+    message = _format_sell_message(
+        position=position,
+        exit_price=exit_price,
+        exit_timestamp=quote.timestamp,
+    )
 
     send_alert(message)
 
-    DATA_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    print(message)
 
-    STATE_FILE.write_text(
-        result.signal.to_json(),
-        encoding="utf-8",
-    )
-
-    print(
-        "Telegram BUY alert sent successfully."
-    )
+    if STATE_FILE.exists():
+        STATE_FILE.unlink()
 
 
 def run_smoke() -> None:
     print(
         "NIFTY Options BTST production runner initialized."
     )
-
     print(
-        "Modes: 3pm, smoke."
+        "Underlying provider: Yahoo Finance."
+    )
+    print(
+        "Option-chain provider: NSE."
+    )
+    print(
+        "Modes: 3pm, 915, smoke."
     )
 
 
@@ -153,6 +320,7 @@ def main() -> None:
         "--mode",
         choices=(
             "3pm",
+            "915",
             "smoke",
         ),
         default="smoke",
@@ -162,6 +330,8 @@ def main() -> None:
 
     if args.mode == "3pm":
         run_3pm()
+    elif args.mode == "915":
+        run_915()
     else:
         run_smoke()
 
