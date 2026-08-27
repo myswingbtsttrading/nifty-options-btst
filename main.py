@@ -11,12 +11,8 @@ from notifier import send_alert
 from nse_live_data import (
     fetch_nifty_option_chain,
     find_option_quote,
-    nearest_nifty_expiry,
 )
-from yahoo_nifty_data import (
-    fetch_nifty_quote,
-    load_nifty_history,
-)
+from yahoo_nifty_data import load_nifty_history
 
 
 DATA_DIR = Path("data")
@@ -24,26 +20,27 @@ STATE_FILE = DATA_DIR / "live_btst_signal.json"
 
 
 def _load_historical_nifty_rows(
-    current_price: float,
-    previous_close: float,
+    current_price: float | None = None,
+    previous_close: float | None = None,
 ):
+    """
+    Load recent NIFTY daily history from Yahoo Finance.
+
+    Optional current_price/previous_close arguments are retained for
+    backward compatibility with existing callers and tests.
+
+    The live signal engine itself obtains the current Yahoo quote and
+    appends the current price when calculating indicators.
+    """
     rows = load_nifty_history(
         days=120
     )
 
-    if not rows:
+    if len(rows) < 50:
         raise LiveMarketDataError(
-            "Yahoo Finance returned no NIFTY historical rows."
+            "Fewer than 50 valid NIFTY historical prices "
+            "were returned by Yahoo Finance."
         )
-
-    quote = fetch_nifty_quote()
-
-    rows.append(
-        {
-            "timestamp": quote.timestamp,
-            "close": float(current_price),
-        }
-    )
 
     return rows
 
@@ -107,9 +104,11 @@ def _save_signal_state(
         exist_ok=True,
     )
 
+    payload = signal.to_dict()
+
     STATE_FILE.write_text(
         json.dumps(
-            signal.to_dict(),
+            payload,
             indent=2,
         ),
         encoding="utf-8",
@@ -165,7 +164,9 @@ def _load_signal_state() -> dict:
             + ", ".join(missing)
         )
 
-    if str(payload["decision"]).upper() != "BUY":
+    if str(
+        payload["decision"]
+    ).upper() != "BUY":
         raise LiveMarketDataError(
             "Stored BTST position is not an active BUY."
         )
@@ -181,6 +182,7 @@ def _format_sell_message(
     entry_price = float(
         position["entry_price"]
     )
+
     quantity = int(
         position["quantity"]
     )
@@ -223,12 +225,7 @@ def _format_sell_message(
 
 
 def run_3pm() -> None:
-    quote = fetch_nifty_quote()
-
-    historical_rows = _load_historical_nifty_rows(
-        current_price=quote.price,
-        previous_close=quote.previous_close,
-    )
+    historical_rows = _load_historical_nifty_rows()
 
     result = build_live_signal(
         historical_rows=historical_rows,
@@ -280,12 +277,10 @@ def run_915() -> None:
             "Current option premium must be positive."
         )
 
-    quote = fetch_nifty_quote()
-
     message = _format_sell_message(
         position=position,
         exit_price=exit_price,
-        exit_timestamp=quote.timestamp,
+        exit_timestamp=option_quote.timestamp,
     )
 
     send_alert(message)
