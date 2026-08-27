@@ -3,58 +3,40 @@ from __future__ import annotations
 import argparse
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from live_market_data import LiveMarketDataError
 from live_signal_engine import build_live_signal
 from notifier import send_alert
-from nse_live_data import (
-    fetch_nifty_option_chain,
-    nearest_nifty_expiry,
-)
-from yahoo_nifty_data import (
-    fetch_nifty_quote,
-    load_nifty_history,
-)
+from yahoo_nifty_data import load_nifty_history
 
 
 DATA_DIR = Path("data")
 STATE_FILE = DATA_DIR / "live_btst_signal.json"
 
 
-def _load_historical_nifty_rows(
-    current_price: float,
-    previous_close: float,
-):
+def _load_historical_nifty_rows() -> list[dict[str, Any]]:
     """
-    Load NIFTY history from Yahoo Finance.
+    Load recent NIFTY daily history from Yahoo Finance.
 
-    The current Yahoo NIFTY quote is appended to the daily
-    historical series so the indicator engine evaluates the
-    current 3 PM market price.
+    Step 11 makes Yahoo Finance the primary NIFTY spot/history provider.
+    The live signal engine separately obtains the current quote from the
+    same Yahoo provider.
     """
-
     rows = load_nifty_history(
         days=120
     )
 
-    if not rows:
+    if len(rows) < 50:
         raise LiveMarketDataError(
-            "Yahoo Finance returned no NIFTY historical rows."
+            "Fewer than 50 valid NIFTY historical prices "
+            "were returned by Yahoo Finance."
         )
-
-    rows.append(
-        {
-            "timestamp": fetch_nifty_quote().timestamp,
-            "close": float(current_price),
-        }
-    )
 
     return rows
 
 
-def _format_signal_message(
-    result,
-) -> str:
+def _format_signal_message(result) -> str:
     signal = result.signal
     nifty_signal = result.nifty_signal
     indicators = result.indicators
@@ -105,19 +87,16 @@ def _format_signal_message(
 
 
 def run_3pm() -> None:
-    quote = fetch_nifty_quote()
+    """
+    Execute the complete 3 PM BTST signal pipeline.
 
-    historical_rows = _load_historical_nifty_rows(
-        current_price=quote.price,
-        previous_close=quote.previous_close,
-    )
-
-    chain = fetch_nifty_option_chain()
-
-    expiry = nearest_nifty_expiry(
-        chain,
-        today=date.today(),
-    )
+    Data architecture:
+        NIFTY spot/history -> Yahoo Finance
+        option chain      -> NSE
+        signal            -> live signal engine
+        alert             -> Telegram
+    """
+    historical_rows = _load_historical_nifty_rows()
 
     result = build_live_signal(
         historical_rows=historical_rows,
@@ -130,33 +109,34 @@ def run_3pm() -> None:
         result
     )
 
+    print(message)
+
+    if result.signal.decision != "BUY":
+        print(
+            "No BUY signal. Telegram BUY alert not sent."
+        )
+        return
+
     send_alert(message)
 
-    if result.signal.decision == "BUY":
-        DATA_DIR.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+    DATA_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-        STATE_FILE.write_text(
-            result.signal.to_json(),
-            encoding="utf-8",
-        )
+    STATE_FILE.write_text(
+        result.signal.to_json(),
+        encoding="utf-8",
+    )
 
-    print(message)
+    print(
+        "Telegram BUY alert sent successfully."
+    )
 
 
 def run_smoke() -> None:
     print(
         "NIFTY Options BTST production runner initialized."
-    )
-
-    print(
-        "Underlying provider: Yahoo Finance."
-    )
-
-    print(
-        "Option-chain provider: NSE."
     )
 
     print(
