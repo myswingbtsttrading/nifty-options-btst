@@ -119,6 +119,7 @@ def _parse_expiry(value: Any) -> date:
         "%d/%m/%Y",
         "%Y/%m/%d",
         "%d-%b-%Y",
+        "%d-%B-%Y",
     )
 
     for fmt in formats:
@@ -160,6 +161,8 @@ def normalize_underlying_quote(
             "datetime",
             "date_time",
             "DateTime",
+            "time",
+            "timeVal",
         ),
     )
 
@@ -169,6 +172,8 @@ def normalize_underlying_quote(
             "price",
             "ltp",
             "last_price",
+            "lastPrice",
+            "last",
             "close",
             "Close",
         ),
@@ -222,6 +227,7 @@ def normalize_option_quote(
             "datetime",
             "date_time",
             "DateTime",
+            "lastUpdateTime",
         ),
     )
 
@@ -232,6 +238,7 @@ def normalize_option_quote(
             "expiry_date",
             "Expiry",
             "ExpiryDate",
+            "expiryDate",
         ),
     )
 
@@ -242,31 +249,37 @@ def normalize_option_quote(
             "strike_price",
             "Strike",
             "StrikePrice",
+            "strikePrice",
         ),
     )
 
+    # NSE commonly uses optionType, while internal code uses
+    # option_type. Support both.
     option_type = _first_present(
         payload,
         (
             "option_type",
             "optiontype",
+            "optionType",
             "type",
             "OptionType",
         ),
     )
 
+    # NSE uses lastPrice. Support all common variants.
     price = _first_present(
         payload,
         (
             "price",
             "ltp",
             "last_price",
+            "lastPrice",
             "close",
             "Close",
         ),
     )
 
-    missing = []
+    missing: list[str] = []
 
     if timestamp is None:
         missing.append("timestamp")
@@ -293,7 +306,10 @@ def normalize_option_quote(
         option_type
     ).strip().upper()
 
-    if normalized_type not in {"CE", "PE"}:
+    if normalized_type not in {
+        "CE",
+        "PE",
+    }:
         raise LiveMarketDataError(
             f"Unsupported option type: "
             f"{normalized_type}"
