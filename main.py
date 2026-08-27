@@ -19,18 +19,12 @@ DATA_DIR = Path("data")
 STATE_FILE = DATA_DIR / "live_btst_signal.json"
 
 
-def _load_historical_nifty_rows(
-    current_price: float | None = None,
-    previous_close: float | None = None,
-):
+def _load_historical_nifty_rows():
     """
     Load recent NIFTY daily history from Yahoo Finance.
 
-    Optional current_price/previous_close arguments are retained for
-    backward compatibility with existing callers and tests.
-
-    The live signal engine itself obtains the current Yahoo quote and
-    appends the current price when calculating indicators.
+    The current live NIFTY quote is intentionally not fetched here.
+    build_live_signal() owns the live quote and option-chain retrieval.
     """
     rows = load_nifty_history(
         days=120
@@ -99,19 +93,61 @@ def _format_signal_message(
 def _save_signal_state(
     signal,
 ) -> None:
+    """
+    Persist an actionable BUY signal.
+
+    Supports both the real BTSTSignal.to_dict() API and the
+    older to_json() compatibility API used by existing tests.
+    """
     DATA_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    payload = signal.to_dict()
+    if hasattr(
+        signal,
+        "to_dict",
+    ):
+        payload = signal.to_dict()
 
-    STATE_FILE.write_text(
-        json.dumps(
-            payload,
-            indent=2,
-        ),
-        encoding="utf-8",
+        STATE_FILE.write_text(
+            json.dumps(
+                payload,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        return
+
+    if hasattr(
+        signal,
+        "to_json",
+    ):
+        raw = signal.to_json()
+
+        try:
+            parsed = json.loads(raw)
+        except (
+            TypeError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise LiveMarketDataError(
+                "BTST signal returned invalid JSON state."
+            ) from exc
+
+        STATE_FILE.write_text(
+            json.dumps(
+                parsed,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+
+        return
+
+    raise LiveMarketDataError(
+        "BTST signal does not provide to_dict() or to_json()."
     )
 
 
@@ -136,7 +172,10 @@ def _load_signal_state() -> dict:
             f"Unable to read BTST position state: {exc}"
         ) from exc
 
-    if not isinstance(payload, dict):
+    if not isinstance(
+        payload,
+        dict,
+    ):
         raise LiveMarketDataError(
             "BTST position state is invalid."
         )
@@ -225,6 +264,13 @@ def _format_sell_message(
 
 
 def run_3pm() -> None:
+    """
+    Generate the 3 PM BTST signal.
+
+    Telegram is sent only for an actionable BUY.
+    A WAIT/NO TRADE result is printed but does not generate
+    a Telegram alert or position state.
+    """
     historical_rows = _load_historical_nifty_rows()
 
     result = build_live_signal(
@@ -238,17 +284,22 @@ def run_3pm() -> None:
         result
     )
 
+    print(message)
+
+    if result.signal.decision != "BUY":
+        return
+
     send_alert(message)
 
-    if result.signal.decision == "BUY":
-        _save_signal_state(
-            result.signal
-        )
-
-    print(message)
+    _save_signal_state(
+        result.signal
+    )
 
 
 def run_915() -> None:
+    """
+    Close the previous BTST position using the current option premium.
+    """
     position = _load_signal_state()
 
     chain = fetch_nifty_option_chain()
@@ -295,12 +346,15 @@ def run_smoke() -> None:
     print(
         "NIFTY Options BTST production runner initialized."
     )
+
     print(
         "Underlying provider: Yahoo Finance."
     )
+
     print(
         "Option-chain provider: NSE."
     )
+
     print(
         "Modes: 3pm, 915, smoke."
     )
