@@ -1,16 +1,11 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date
 from pathlib import Path
 
 from live_market_data import LiveMarketDataError
 from live_signal_engine import build_live_signal
 from notifier import send_alert
-from nse_live_data import (
-    fetch_nifty_option_chain,
-    nearest_nifty_expiry,
-)
 from yahoo_nifty_data import (
     fetch_nifty_quote,
     load_nifty_history,
@@ -28,9 +23,9 @@ def _load_historical_nifty_rows(
     """
     Load NIFTY history from Yahoo Finance.
 
-    The current Yahoo NIFTY quote is appended to the daily
-    historical series so the indicator engine evaluates the
-    current 3 PM market price.
+    The current NIFTY quote is appended to the historical
+    series so the indicator engine evaluates the current
+    market price.
     """
 
     rows = load_nifty_history(
@@ -42,9 +37,11 @@ def _load_historical_nifty_rows(
             "Yahoo Finance returned no NIFTY historical rows."
         )
 
+    quote = fetch_nifty_quote()
+
     rows.append(
         {
-            "timestamp": fetch_nifty_quote().timestamp,
+            "timestamp": quote.timestamp,
             "close": float(current_price),
         }
     )
@@ -110,9 +107,7 @@ def _persist_signal_state(
     """
     Persist only an active BUY position.
 
-    A NO TRADE result removes any stale previous position
-    state so the repository never carries yesterday's BTST
-    position into a new trading day.
+    NO TRADE removes any stale previous position.
     """
 
     if result.signal.decision == "BUY":
@@ -153,18 +148,10 @@ def run_3pm() -> None:
         previous_close=quote.previous_close,
     )
 
-    chain = fetch_nifty_option_chain()
-
-    expiry = nearest_nifty_expiry(
-        chain,
-        today=date.today(),
-    )
-
     result = build_live_signal(
         historical_rows=historical_rows,
         capital=100000.0,
         lot_size=65,
-        today=date.today(),
     )
 
     message = _format_signal_message(
