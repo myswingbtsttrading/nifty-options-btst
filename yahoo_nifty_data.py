@@ -64,9 +64,13 @@ def _normalise_timestamp(
 
 def _extract_previous_close(
     ticker: Any,
+    current_timestamp: datetime | None = None,
 ) -> float | None:
     """
-    Extract the previous close when Yahoo exposes it.
+    Extract the previous trading day's close.
+
+    Yahoo may expose previous close through fast_info. When that is
+    unavailable, fall back to daily historical data.
     """
 
     try:
@@ -101,6 +105,75 @@ def _extract_previous_close(
 
     except Exception:
         pass
+
+    try:
+        daily = ticker.history(
+            period="5d",
+            interval="1d",
+            auto_adjust=False,
+            prepost=False,
+        )
+    except Exception:
+        return None
+
+    if daily is None or daily.empty:
+        return None
+
+    if "Close" not in daily.columns:
+        return None
+
+    valid_rows = []
+
+    for timestamp, row in daily.iterrows():
+        close = row.get("Close")
+
+        if close is None:
+            continue
+
+        try:
+            close_value = float(close)
+        except (
+            TypeError,
+            ValueError,
+        ):
+            continue
+
+        if close_value <= 0:
+            continue
+
+        try:
+            timestamp_value = _normalise_timestamp(
+                timestamp
+            )
+        except LiveMarketDataError:
+            continue
+
+        valid_rows.append(
+            (
+                timestamp_value,
+                close_value,
+            )
+        )
+
+    if not valid_rows:
+        return None
+
+    valid_rows.sort(
+        key=lambda item: item[0]
+    )
+
+    if current_timestamp is not None:
+        previous_rows = [
+            row
+            for row in valid_rows
+            if row[0].date() < current_timestamp.date()
+        ]
+
+        if previous_rows:
+            return previous_rows[-1][1]
+
+    if len(valid_rows) >= 2:
+        return valid_rows[-2][1]
 
     return None
 
@@ -165,12 +238,15 @@ def fetch_nifty_quote() -> NiftyQuote:
         intraday.index[-1]
     )
 
+    previous_close = _extract_previous_close(
+        ticker,
+        current_timestamp=timestamp,
+    )
+
     return NiftyQuote(
         timestamp=timestamp,
         price=price,
-        previous_close=_extract_previous_close(
-            ticker
-        ),
+        previous_close=previous_close,
     )
 
 
