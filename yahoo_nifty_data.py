@@ -1,149 +1,51 @@
+"""
+Yahoo Finance NIFTY data provider.
+
+Used as a fallback market-data source when NSE live data is
+unavailable or blocked.
+"""
+
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import yfinance as yf
 
-from live_market_data import (
-    LiveMarketDataError,
-    LiveUnderlyingQuote,
-)
+from live_market_data import LiveMarketDataError
 
 
 YAHOO_SYMBOL = "^NSEI"
 
+MIN_HISTORY_DAYS = 60
+MIN_HISTORY_ROWS = 20
 
-def _validate_positive(
-    value: Any,
-    field: str,
-) -> float:
-    try:
-        result = float(value)
-    except (TypeError, ValueError) as exc:
-        raise LiveMarketDataError(
-            f"Invalid {field}: {value!r}"
-        ) from exc
 
-    if result <= 0:
-        raise LiveMarketDataError(
-            f"{field} must be positive."
+def _normalise_timestamp(value: Any) -> datetime:
+    """
+    Convert Yahoo Finance timestamps into naive datetimes.
+    """
+    if isinstance(value, datetime):
+        result = value
+    else:
+        try:
+            result = datetime.fromisoformat(
+                str(value).replace(
+                    "Z",
+                    "+00:00",
+                )
+            )
+        except ValueError as exc:
+            raise LiveMarketDataError(
+                f"Unsupported Yahoo Finance timestamp: {value}"
+            ) from exc
+
+    if result.tzinfo is not None:
+        result = result.replace(
+            tzinfo=None
         )
 
     return result
-
-
-def _normalise_timestamp(
-    value: Any,
-) -> datetime:
-    if isinstance(value, datetime):
-        if value.tzinfo is not None:
-            return value.replace(tzinfo=None)
-        return value
-
-    try:
-        timestamp = value.to_pydatetime()
-    except AttributeError:
-        timestamp = datetime.now()
-
-    if timestamp.tzinfo is not None:
-        timestamp = timestamp.replace(tzinfo=None)
-
-    return timestamp
-
-
-def fetch_nifty_quote() -> LiveUnderlyingQuote:
-    """
-    Fetch the live NIFTY 50 underlying quote from Yahoo Finance.
-
-    Yahoo Finance is intentionally the primary underlying-price
-    provider for the production GitHub Actions runner.
-
-    NSE remains responsible for the option-chain data.
-    """
-
-    try:
-        ticker = yf.Ticker(YAHOO_SYMBOL)
-
-        intraday = ticker.history(
-            period="1d",
-            interval="1m",
-            auto_adjust=False,
-            prepost=False,
-        )
-
-        daily = ticker.history(
-            period="5d",
-            interval="1d",
-            auto_adjust=False,
-            prepost=False,
-        )
-    except Exception as exc:
-        raise LiveMarketDataError(
-            f"Yahoo Finance NIFTY request failed: {exc}"
-        ) from exc
-
-    if intraday is None or intraday.empty:
-        raise LiveMarketDataError(
-            "Yahoo Finance returned no intraday NIFTY data."
-        )
-
-    if "Close" not in intraday.columns:
-        raise LiveMarketDataError(
-            "Yahoo Finance intraday NIFTY data has no Close column."
-        )
-
-    intraday_close = intraday["Close"].dropna()
-
-    if intraday_close.empty:
-        raise LiveMarketDataError(
-            "Yahoo Finance returned no valid intraday NIFTY prices."
-        )
-
-    current_price = _validate_positive(
-        intraday_close.iloc[-1],
-        "NIFTY price",
-    )
-
-    timestamp = _normalise_timestamp(
-        intraday_close.index[-1]
-    )
-
-    previous_close: float | None = None
-
-    if (
-        daily is not None
-        and not daily.empty
-        and "Close" in daily.columns
-    ):
-        daily_close = daily["Close"].dropna()
-
-        if len(daily_close) >= 2:
-            previous_close = _validate_positive(
-                daily_close.iloc[-2],
-                "previous close",
-            )
-
-    if previous_close is None:
-        try:
-            fast_info = ticker.fast_info
-            previous_close = _validate_positive(
-                fast_info.get("previous_close"),
-                "previous close",
-            )
-        except Exception:
-            previous_close = None
-
-    if previous_close is None:
-        raise LiveMarketDataError(
-            "Yahoo Finance could not determine NIFTY previous close."
-        )
-
-    return LiveUnderlyingQuote(
-        timestamp=timestamp,
-        price=current_price,
-        previous_close=previous_close,
-    )
 
 
 def load_nifty_history(
@@ -151,15 +53,23 @@ def load_nifty_history(
 ) -> list[dict[str, Any]]:
     """
     Load daily NIFTY history required by the live signal engine.
+
+    Yahoo can occasionally return fewer rows than the requested
+    calendar period because markets are closed on weekends and
+    holidays. Therefore validation is based on having enough
+    usable observations rather than requiring an arbitrary
+    50-row minimum.
     """
 
-    if days < 60:
+    if days < MIN_HISTORY_DAYS:
         raise ValueError(
-            "days must be at least 60."
+            f"days must be at least {MIN_HISTORY_DAYS}."
         )
 
     try:
-        ticker = yf.Ticker(YAHOO_SYMBOL)
+        ticker = yf.Ticker(
+            YAHOO_SYMBOL
+        )
 
         history = ticker.history(
             period=f"{days}d",
@@ -207,10 +117,35 @@ def load_nifty_history(
             }
         )
 
-    if len(rows) < 50:
+    if len(rows) < MIN_HISTORY_ROWS:
         raise LiveMarketDataError(
-            "Fewer than 50 valid NIFTY historical prices "
+            "Fewer than "
+            f"{MIN_HISTORY_ROWS} valid NIFTY historical prices "
             "were returned by Yahoo Finance."
         )
 
+    rows.sort(
+        key=lambda item: item["timestamp"]
+    )
+
     return rows
+
+
+def fetch_nifty_history(
+    days: int = 120,
+) -> list[dict[str, Any]]:
+    """
+    Backward-compatible alias for load_nifty_history().
+    """
+    return load_nifty_history(
+        days=days
+    )
+
+
+__all__ = [
+    "YAHOO_SYMBOL",
+    "MIN_HISTORY_DAYS",
+    "MIN_HISTORY_ROWS",
+    "load_nifty_history",
+    "fetch_nifty_history",
+]
