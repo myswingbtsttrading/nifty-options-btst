@@ -617,49 +617,6 @@ def fetch_nifty_quote(
     )
 
 
-def _extract_chain_container(
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    """
-    Return the NSE object containing option-chain rows.
-
-    NSE has used several response layouts across the
-    option-chain and option-chain-v3 endpoints:
-
-        payload["records"]
-        payload["filtered"]
-        payload["data"]
-        payload["records"]["data"]
-        payload["filtered"]["data"]
-
-    Keep all of these layouts compatible.
-    """
-
-    if not isinstance(
-        payload,
-        dict,
-    ):
-        return {}
-
-    records = payload.get("records")
-
-    if isinstance(
-        records,
-        dict,
-    ):
-        return records
-
-    filtered = payload.get("filtered")
-
-    if isinstance(
-        filtered,
-        dict,
-    ):
-        return filtered
-
-    return payload
-
-
 def _normalise_chain_records(
     payload: dict[str, Any],
 ) -> tuple[
@@ -675,32 +632,29 @@ def _normalise_chain_records(
             "NSE option-chain payload is invalid."
         )
 
-    records = payload.get("records")
+    records_payload = payload.get("records")
 
     if not isinstance(
-        records,
+        records_payload,
         dict,
     ):
-        records = {}
+        records_payload = {}
 
-    filtered = payload.get("filtered")
+    filtered_payload = payload.get("filtered")
 
     if not isinstance(
-        filtered,
+        filtered_payload,
         dict,
     ):
-        filtered = {}
+        filtered_payload = {}
 
-    # NSE option-chain-v3 can expose contract rows through
-    # records.data or filtered.data. Prefer records.data because
-    # it normally contains the complete chain.
-    raw_data = records.get("data")
+    raw_data = records_payload.get("data")
 
     if not isinstance(
         raw_data,
         list,
     ):
-        raw_data = filtered.get("data")
+        raw_data = filtered_payload.get("data")
 
     if not isinstance(
         raw_data,
@@ -715,39 +669,30 @@ def _normalise_chain_records(
         raw_data = []
 
     underlying = _first_float(
-        records.get("underlyingValue"),
-        filtered.get("underlyingValue"),
+        records_payload.get("underlyingValue"),
+        records_payload.get("underlying_value"),
         payload.get("underlyingValue"),
+        payload.get("underlying_value"),
     )
 
     if underlying is None:
         for item in raw_data:
-            if not isinstance(
-                item,
-                dict,
-            ):
+            if not isinstance(item, dict):
                 continue
 
             ce = item.get("CE")
             pe = item.get("PE")
 
-            if isinstance(
-                ce,
-                dict,
-            ):
+            if isinstance(ce, dict):
                 underlying = _first_float(
                     ce.get("underlyingValue"),
+                    ce.get("underlying_value"),
                 )
 
-            if (
-                underlying is None
-                and isinstance(
-                    pe,
-                    dict,
-                )
-            ):
+            if underlying is None and isinstance(pe, dict):
                 underlying = _first_float(
                     pe.get("underlyingValue"),
+                    pe.get("underlying_value"),
                 )
 
             if underlying is not None:
@@ -756,14 +701,11 @@ def _normalise_chain_records(
     if underlying is None:
         underlying = 0.0
 
-    raw_expiries = records.get(
+    raw_expiries = records_payload.get(
         "expiryDates",
-        filtered.get(
+        payload.get(
             "expiryDates",
-            payload.get(
-                "expiryDates",
-                [],
-            ),
+            [],
         ),
     )
 
@@ -779,7 +721,7 @@ def _normalise_chain_records(
             if parsed is not None:
                 expiries.append(parsed)
 
-    normalized_records: list[
+    records: list[
         dict[str, Any]
     ] = []
 
@@ -818,27 +760,18 @@ def _normalise_chain_records(
             or item.get("expiry")
         )
 
-        # v3 commonly provides expiryDate inside CE/PE.
-        if (
-            expiry is None
-            and ce is not None
-        ):
+        if expiry is None and ce is not None:
             expiry = _parse_expiry(
                 ce.get("expiryDate")
                 or ce.get("expiry")
             )
 
-        if (
-            expiry is None
-            and pe is not None
-        ):
+        if expiry is None and pe is not None:
             expiry = _parse_expiry(
                 pe.get("expiryDate")
                 or pe.get("expiry")
             )
 
-        # Some NSE responses expose expiryDates as the row-level
-        # field rather than expiryDate.
         if expiry is None:
             row_expiry = item.get(
                 "expiryDates"
@@ -862,7 +795,7 @@ def _normalise_chain_records(
         if expiry is None:
             continue
 
-        normalized_records.append(
+        records.append(
             {
                 "strike": strike,
                 "expiry": expiry,
@@ -874,109 +807,14 @@ def _normalise_chain_records(
         if expiry not in expiries:
             expiries.append(expiry)
 
-    expiries = sorted(
-        set(expiries)
-    )
-
     return (
         underlying,
-        tuple(expiries),
-        tuple(normalized_records),
-    )
-
-
-def _payload_has_option_chain_records(
-    payload: dict[str, Any],
-) -> bool:
-    try:
-        (
-            _underlying,
-            _expiries,
-            records,
-        ) = _normalise_chain_records(
-            payload
-        )
-    except LiveMarketDataError:
-        return False
-
-    return bool(records)
-
-
-def _extract_contract_expiry_values(
-    payload: dict[str, Any],
-) -> list[
-    tuple[date, Any]
-]:
-    """
-    Extract expiry dates from all known NSE contract-info
-    response layouts.
-    """
-
-    if not isinstance(
-        payload,
-        dict,
-    ):
-        return []
-
-    containers: list[
-        dict[str, Any]
-    ] = []
-
-    for key in (
-        "records",
-        "filtered",
-        "data",
-    ):
-        value = payload.get(key)
-
-        if isinstance(
-            value,
-            dict,
-        ):
-            containers.append(value)
-
-    containers.append(payload)
-
-    values: list[Any] = []
-
-    for container in containers:
-        raw = container.get(
-            "expiryDates"
-        )
-
-        if isinstance(
-            raw,
-            list,
-        ):
-            values.extend(raw)
-
-    result: list[
-        tuple[date, Any]
-    ] = []
-
-    seen: set[date] = set()
-
-    for value in values:
-        parsed = _parse_expiry(value)
-
-        if parsed is None:
-            continue
-
-        if parsed in seen:
-            continue
-
-        seen.add(parsed)
-
-        result.append(
-            (
-                parsed,
-                value,
+        tuple(
+            sorted(
+                set(expiries)
             )
-        )
-
-    return sorted(
-        result,
-        key=lambda item: item[0],
+        ),
+        tuple(records),
     )
 
 
@@ -984,15 +822,8 @@ def _fetch_nifty_option_chain_v3(
     session: requests.Session,
 ) -> dict[str, Any]:
     """
-    Fetch NIFTY option-chain-v3.
-
-    NSE has changed the shape of contract-info and option-chain
-    responses over time. Resolve multiple valid expiries and
-    validate the returned payload before accepting it.
-
-    The nearest expiry is attempted first. If NSE returns an
-    empty chain for that expiry, the next available future
-    expiries are attempted before giving up.
+    Fetch the nearest NIFTY expiry from NSE contract-info
+    and then request the current option chain through v3.
     """
 
     contract_info = _get_json(
@@ -1006,9 +837,33 @@ def _fetch_nifty_option_chain_v3(
         },
     )
 
-    valid_expiries = _extract_contract_expiry_values(
-        contract_info
+    raw_expiries = contract_info.get(
+        "expiryDates",
+        [],
     )
+
+    if not isinstance(
+        raw_expiries,
+        list,
+    ):
+        raise LiveMarketDataError(
+            "NSE contract-info returned invalid expiry data."
+        )
+
+    valid_expiries: list[
+        tuple[date, Any]
+    ] = []
+
+    for value in raw_expiries:
+        parsed = _parse_expiry(value)
+
+        if parsed is not None:
+            valid_expiries.append(
+                (
+                    parsed,
+                    value,
+                )
+            )
 
     if not valid_expiries:
         raise LiveMarketDataError(
@@ -1023,85 +878,31 @@ def _fetch_nifty_option_chain_v3(
         if item[0] >= today
     ]
 
-    candidates = (
-        future_expiries
+    selected_expiry = (
+        min(
+            future_expiries,
+            key=lambda item: item[0],
+        )
         if future_expiries
-        else valid_expiries
+        else min(
+            valid_expiries,
+            key=lambda item: item[0],
+        )
     )
 
-    errors: list[str] = []
+    expiry_value = selected_expiry[1]
 
-    # Do not make an excessive number of NSE requests.
-    # The nearest few expiries are sufficient to recover from
-    # an expiry-specific empty response.
-    candidates = candidates[:5]
-
-    for expiry_date, expiry_value in candidates:
-        try:
-            payload = _get_json(
-                session,
-                (
-                    f"{NSE_BASE_URL}"
-                    "/api/option-chain-v3"
-                ),
-                params={
-                    "type": "Indices",
-                    "symbol": "NIFTY",
-                    "expiry": expiry_value,
-                },
-            )
-
-            if _payload_has_option_chain_records(
-                payload
-            ):
-                return payload
-
-            errors.append(
-                "NSE returned no NIFTY option-chain "
-                f"records for {expiry_value}."
-            )
-
-        except LiveMarketDataError as exc:
-            errors.append(
-                f"{expiry_value}: {exc}"
-            )
-
-    # A final request without an expiry is useful because NSE
-    # may temporarily reject a specific expiry while still
-    # returning the default/current chain.
-    try:
-        payload = _get_json(
-            session,
-            (
-                f"{NSE_BASE_URL}"
-                "/api/option-chain-v3"
-            ),
-            params={
-                "type": "Indices",
-                "symbol": "NIFTY",
-            },
-        )
-
-        if _payload_has_option_chain_records(
-            payload
-        ):
-            return payload
-
-        errors.append(
-            "NSE returned no NIFTY option-chain records "
-            "without an expiry."
-        )
-
-    except LiveMarketDataError as exc:
-        errors.append(
-            f"default v3 request: {exc}"
-        )
-
-    detail = " | ".join(errors)
-
-    raise LiveMarketDataError(
-        "NSE returned no NIFTY option-chain records. "
-        + detail
+    return _get_json(
+        session,
+        (
+            f"{NSE_BASE_URL}"
+            "/api/option-chain-v3"
+        ),
+        params={
+            "type": "Indices",
+            "symbol": "NIFTY",
+            "expiry": expiry_value,
+        },
     )
 
 
@@ -1290,21 +1091,36 @@ def nearest_nifty_expiry(
 
 
 def build_option_chain_snapshot(
-    payload: dict[str, Any],
-    nifty_price: float,
-    expiry: date,
+    payload: dict[str, Any] | None = None,
+    nifty_price: float = 0.0,
+    expiry: date | None = None,
     strikes_each_side: int = 2,
     option_chain_payload: dict[str, Any] | None = None,
 ) -> OptionChainSnapshot:
     """
     Build aggregated option-chain statistics.
 
-    option_chain_payload is accepted as a compatibility alias
-    for callers using the newer parameter name.
+    Supports both parameter names:
+
+        payload=
+        option_chain_payload=
+
+    This preserves compatibility with older callers while
+    supporting the newer live-signal-engine interface.
     """
 
     if option_chain_payload is not None:
         payload = option_chain_payload
+
+    if payload is None:
+        raise LiveMarketDataError(
+            "Option-chain payload is required."
+        )
+
+    if expiry is None:
+        raise LiveMarketDataError(
+            "Option-chain expiry is required."
+        )
 
     if nifty_price <= 0:
         raise ValueError(
