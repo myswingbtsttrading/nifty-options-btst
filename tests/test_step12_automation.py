@@ -1,5 +1,4 @@
 from datetime import date
-from pathlib import Path
 
 import main
 
@@ -10,6 +9,7 @@ class FakeSignal:
     expiry = date(2026, 8, 27)
     strike = 25000.0
     option_type = "CE"
+    nifty_price = 25020.0
     entry_price = 125.0
     stop_loss = 106.25
     target = 162.50
@@ -87,6 +87,7 @@ def test_run_3pm_sends_telegram_for_buy(
     assert len(calls) == 1
     assert "NIFTY BTST BUY ALERT" in calls[0]
     assert "BUY CE" in calls[0]
+    assert "₹25,020.00" in calls[0]
 
     state_file = (
         tmp_path
@@ -160,10 +161,7 @@ def test_historical_loader_requires_at_least_50_rows(
     try:
         main._load_historical_nifty_rows()
     except Exception as exc:
-        assert (
-            "Fewer than 50"
-            in str(exc)
-        )
+        assert "Fewer than 50" in str(exc)
     else:
         raise AssertionError(
             "Expected historical-data validation to fail."
