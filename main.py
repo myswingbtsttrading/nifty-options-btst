@@ -1,3 +1,4 @@
+```python
 from __future__ import annotations
 
 import argparse
@@ -29,13 +30,15 @@ def _load_historical_nifty_rows(
     previous_close: float | None = None,
 ):
     """
-    Load enough NIFTY history for the live indicator engine.
+    Load NIFTY history for the live indicator engine.
 
-    The arguments are optional for backward compatibility with the
-    automation tests and older callers.
+    The current live price is appended to the historical series.
+    Arguments remain optional for compatibility with automation tests.
     """
 
-    rows = load_nifty_history(days=120)
+    rows = load_nifty_history(
+        days=120
+    )
 
     if not rows:
         raise LiveMarketDataError(
@@ -50,6 +53,7 @@ def _load_historical_nifty_rows(
 
     if current_price is None:
         quote = fetch_nifty_quote()
+
         current_price = quote.price
 
         if previous_close is None:
@@ -126,10 +130,7 @@ def _save_signal_state(
     signal,
 ) -> None:
     """
-    Save an active BTST position state.
-
-    Supports both objects exposing to_dict() and objects exposing
-    to_json().
+    Save an active BUY position state.
     """
 
     DATA_DIR.mkdir(
@@ -139,6 +140,7 @@ def _save_signal_state(
 
     if hasattr(signal, "to_dict"):
         payload = signal.to_dict()
+
         STATE_FILE.write_text(
             json.dumps(
                 payload,
@@ -147,6 +149,7 @@ def _save_signal_state(
             ),
             encoding="utf-8",
         )
+
         return
 
     if hasattr(signal, "to_json"):
@@ -154,6 +157,7 @@ def _save_signal_state(
             signal.to_json(),
             encoding="utf-8",
         )
+
         return
 
     raise TypeError(
@@ -295,10 +299,10 @@ def _format_sell_message(
         f"Option: {option_type}\n"
         f"Strike: {strike}\n"
         f"Expiry: {expiry}\n\n"
-        f"Entry: ₹{entry_price:,.2f}\n"
-        f"Exit: ₹{float(exit_price):,.2f}\n"
+        f"Entry Premium: ₹{entry_price:,.2f}\n"
+        f"Exit Premium: ₹{float(exit_price):,.2f}\n"
         f"Quantity: {quantity}\n"
-        f"P&L: ₹{pnl:,.2f}\n"
+        f"P/L: ₹{pnl:,.2f}\n"
         f"Exit Time: {exit_timestamp}\n"
     )
 
@@ -321,15 +325,19 @@ def run_915() -> None:
             "BTST position state has no expiry."
         )
 
+    expiry_text = str(
+        expiry_value
+    )
+
     try:
-        expiry = datetime.fromisoformat(
-            str(expiry_value)
-        ).date()
+        expiry = date.fromisoformat(
+            expiry_text
+        )
     except ValueError:
         try:
-            expiry = date.fromisoformat(
-                str(expiry_value)
-            )
+            expiry = datetime.fromisoformat(
+                expiry_text
+            ).date()
         except ValueError as exc:
             raise LiveMarketDataError(
                 "BTST position state contains an invalid expiry."
@@ -345,7 +353,9 @@ def run_915() -> None:
             "BTST position state has no strike."
         )
 
-    strike = float(strike_value)
+    strike = float(
+        strike_value
+    )
 
     option_type = str(
         _position_value(
@@ -356,15 +366,20 @@ def run_915() -> None:
         )
     ).upper()
 
-    if option_type not in {"CE", "PE"}:
+    if option_type not in {
+        "CE",
+        "PE",
+    }:
         raise LiveMarketDataError(
             "BTST position state has an invalid option type."
         )
 
     chain = fetch_nifty_option_chain()
 
+    # Use keyword arguments so the call remains compatible with
+    # both the production implementation and the automation mocks.
     option_quote = find_option_quote(
-        chain,
+        payload=chain,
         expiry=expiry,
         strike=strike,
         option_type=option_type,
@@ -397,6 +412,7 @@ def run_915() -> None:
         STATE_FILE.unlink()
 
     print(message)
+
     print(
         "BTST position state removed after exit."
     )
@@ -405,18 +421,10 @@ def run_915() -> None:
 def run_3pm() -> None:
     quote = fetch_nifty_quote()
 
-    historical_rows = _load_historical_nifty_rows()
-
-    chain = fetch_nifty_option_chain()
-
-    expiry = nearest_nifty_expiry(
-        chain,
-        today=date.today(),
+    historical_rows = _load_historical_nifty_rows(
+        current_price=quote.price,
+        previous_close=quote.previous_close,
     )
-
-    # Keep the chain fetch above as a validation step, while
-    # build_live_signal performs its own fresh live-chain fetch.
-    _ = expiry
 
     result = build_live_signal(
         historical_rows=historical_rows,
@@ -424,6 +432,20 @@ def run_3pm() -> None:
         lot_size=65,
         today=date.today(),
     )
+
+    # A NO TRADE result must not generate a Telegram alert.
+    if result.signal.decision != "BUY":
+        _persist_signal_state(
+            result
+        )
+
+        message = _format_signal_message(
+            result
+        )
+
+        print(message)
+
+        return
 
     message = _format_signal_message(
         result
@@ -452,7 +474,7 @@ def run_smoke() -> None:
     )
 
     print(
-        "Modes: 3pm, 9:15, smoke."
+        "Modes: 3pm, 915, smoke."
     )
 
 
@@ -475,11 +497,14 @@ def main() -> None:
 
     if args.mode == "3pm":
         run_3pm()
+
     elif args.mode == "915":
         run_915()
+
     else:
         run_smoke()
 
 
 if __name__ == "__main__":
     main()
+```
