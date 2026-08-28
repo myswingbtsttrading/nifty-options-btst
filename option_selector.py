@@ -1,386 +1,325 @@
-from __future__ import annotations
+from **future** import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
-from typing import Any, Mapping
+from datetime import date
+from typing import Any, Mapping, Optional
 
-class OptionSelectionError(ValueError):
+class OptionSelectionError(Exception):
 """Raised when an option contract cannot be selected."""
 
 @dataclass(frozen=True)
 class OptionContract:
 expiry: date
-strike: int
+strike: float
 option_type: str
-selection_mode: str = "ATM"
-
-def _validate_option_type(option_type: str) -> str:
-value = str(option_type).strip().upper()
-
-```
-if value not in {"CE", "PE"}:
-    raise OptionSelectionError(
-        "option_type must be CE or PE."
-    )
-
-return value
-```
-
-def _validate_selection_mode(selection_mode: str) -> str:
-value = str(selection_mode).strip().upper()
-
-```
-if value not in {"ATM", "ITM", "OTM"}:
-    raise OptionSelectionError(
-        "selection_mode must be ATM, ITM, or OTM."
-    )
-
-return value
-```
 
 def round_to_strike(
-nifty_price: float,
+price: float,
 strike_interval: int = 50,
-) -> int:
-if nifty_price <= 0:
-raise OptionSelectionError(
-"nifty_price must be positive."
-)
+) -> float:
+if price <= 0:
+raise ValueError("Price must be positive.")
 
 ```
 if strike_interval <= 0:
+    raise ValueError("Strike interval must be positive.")
+
+return float(
+    round(price / strike_interval)
+    * strike_interval
+)
+```
+
+def _normalise_option_type(
+option_type: str,
+) -> str:
+value = str(option_type).upper().strip()
+
+```
+aliases = {
+    "CALL": "CE",
+    "PUT": "PE",
+    "C": "CE",
+    "P": "PE",
+}
+
+value = aliases.get(
+    value,
+    value,
+)
+
+if value not in {"CE", "PE"}:
     raise OptionSelectionError(
-        "strike_interval must be positive."
+        f"Unsupported option type: {option_type}"
     )
 
-return int(
-    round(
-        float(nifty_price) / strike_interval
-    ) * strike_interval
-)
+return value
 ```
 
-def select_atm_strike(
-nifty_price: float,
-strike_interval: int = 50,
-) -> int:
-return round_to_strike(
-nifty_price=nifty_price,
-strike_interval=strike_interval,
+def _extract_expiry(
+row: Mapping[str, Any],
+) -> Optional[date]:
+value = (
+row.get("expiry")
+or row.get("expiryDate")
+or row.get("expiry_date")
 )
-
-def select_strike(
-nifty_price: float,
-option_type: str,
-selection_mode: str = "ATM",
-strike_interval: int = 50,
-) -> int:
-option_type = _validate_option_type(option_type)
-selection_mode = _validate_selection_mode(selection_mode)
-
-```
-atm = select_atm_strike(
-    nifty_price=nifty_price,
-    strike_interval=strike_interval,
-)
-
-if selection_mode == "ATM":
-    return atm
-
-if option_type == "CE":
-    if selection_mode == "ITM":
-        return atm - strike_interval
-    return atm + strike_interval
-
-if selection_mode == "ITM":
-    return atm + strike_interval
-
-return atm - strike_interval
-```
-
-def select_atm_contract(
-nifty_price: float,
-expiry: date,
-option_type: str,
-strike_interval: int = 50,
-) -> OptionContract:
-return select_contract(
-nifty_price=nifty_price,
-expiry=expiry,
-option_type=option_type,
-selection_mode="ATM",
-strike_interval=strike_interval,
-)
-
-def select_contract(
-nifty_price: float,
-expiry: date,
-option_type: str,
-selection_mode: str = "ATM",
-strike_interval: int = 50,
-) -> OptionContract:
-option_type = _validate_option_type(option_type)
-selection_mode = _validate_selection_mode(selection_mode)
-
-```
-if not isinstance(expiry, date):
-    raise OptionSelectionError(
-        "expiry must be a date."
-    )
-
-strike = select_strike(
-    nifty_price=nifty_price,
-    option_type=option_type,
-    selection_mode=selection_mode,
-    strike_interval=strike_interval,
-)
-
-return OptionContract(
-    expiry=expiry,
-    strike=strike,
-    option_type=option_type,
-    selection_mode=selection_mode,
-)
-```
-
-def _parse_expiry(value: Any) -> date | None:
-if isinstance(value, datetime):
-return value.date()
 
 ```
 if isinstance(value, date):
     return value
 
-if value is None:
+if not value:
     return None
 
 text = str(value).strip()
 
-for fmt in (
+formats = (
     "%d-%b-%Y",
     "%d-%B-%Y",
-    "%d-%m-%Y",
     "%Y-%m-%d",
-):
+    "%d/%m/%Y",
+)
+
+for fmt in formats:
     try:
-        return datetime.strptime(
-            text,
-            fmt,
-        ).date()
-    except ValueError:
+        return date.fromisoformat(
+            date.strptime(
+                text,
+                fmt,
+            ).isoformat()
+        )
+    except (ValueError, AttributeError):
         continue
 
 return None
 ```
 
-def _payload_records(
-payload: Any,
-) -> list[Mapping[str, Any]]:
-"""
-Return normalized option-chain rows from either:
-
-```
-1. The raw NSE dictionary payload:
-   {
-       "records": {
-           "data": [...]
-       }
-   }
-
-2. A NiftyOptionChain object whose records contain
-   normalized rows.
-
-This keeps the selector compatible with both the live
-NSE fetcher and tests using raw NSE payloads.
-"""
-
-# Raw NSE dictionary payload.
-if isinstance(payload, Mapping):
-    records = payload.get("records", {})
-
-    if not isinstance(records, Mapping):
-        raise OptionSelectionError(
-            "Option-chain records are invalid."
-        )
-
-    rows = records.get("data", [])
-
-    if not isinstance(rows, list):
-        raise OptionSelectionError(
-            "Option-chain data is invalid."
-        )
-
-    return [
-        row
-        for row in rows
-        if isinstance(row, Mapping)
-    ]
-
-# Normalized NiftyOptionChain object.
-records = getattr(payload, "records", None)
-
-if records is None:
-    raise OptionSelectionError(
-        "Option-chain payload is invalid."
-    )
-
-if isinstance(records, Mapping):
-    rows = records.get("data", [])
-
-    if not isinstance(rows, (list, tuple)):
-        raise OptionSelectionError(
-            "Option-chain data is invalid."
-        )
-
-    return [
-        row
-        for row in rows
-        if isinstance(row, Mapping)
-    ]
-
-if isinstance(records, (list, tuple)):
-    return [
-        row
-        for row in records
-        if isinstance(row, Mapping)
-    ]
-
-raise OptionSelectionError(
-    "Option-chain records are invalid."
-)
-```
-
-def _row_expiry(row: Mapping[str, Any]) -> date | None:
-for key in (
-"expiryDate",
-"expiry",
-"expiry_date",
-):
-if key in row:
-parsed = _parse_expiry(
-row.get(key)
-)
-
-```
-        if parsed is not None:
-            return parsed
-
-return None
-```
-
-def _row_strike(row: Mapping[str, Any]) -> int | None:
-for key in (
-"strikePrice",
+def _extract_strike(
+row: Mapping[str, Any],
+) -> Optional[float]:
+for name in (
 "strike",
+"strikePrice",
 "strike_price",
 ):
-if key not in row:
-continue
+value = row.get(name)
 
 ```
-    try:
-        return int(
-            float(row[key])
-        )
-    except (
-        TypeError,
-        ValueError,
-    ):
-        return None
+    if value is not None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
 return None
 ```
 
-def _leg_price(
-leg: Any,
-) -> float | None:
-if not isinstance(leg, Mapping):
-return None
-
-```
-for key in (
-    "lastPrice",
-    "last_price",
-    "ltp",
-    "price",
-    "close",
-):
-    value = leg.get(key)
-
-    if value is None:
-        continue
-
-    try:
-        price = float(value)
-    except (
-        TypeError,
-        ValueError,
-    ):
-        continue
-
-    if price > 0:
-        return price
-
-return None
-```
-
-def _normalised_leg(
+def _extract_option_type(
 row: Mapping[str, Any],
-option_type: str,
-) -> Mapping[str, Any] | None:
-leg = row.get(option_type)
+) -> Optional[str]:
+for name in (
+"option_type",
+"optionType",
+"type",
+):
+value = row.get(name)
 
 ```
-if isinstance(leg, Mapping):
-    return leg
+    if value:
+        try:
+            return _normalise_option_type(
+                str(value)
+            )
+        except OptionSelectionError:
+            return None
 
 return None
 ```
 
-def _available_contracts(
-payload: Any,
-expiry: date,
-) -> list[OptionContract]:
-rows = _payload_records(payload)
+def _contract_from_row(
+row: Mapping[str, Any],
+) -> Optional[OptionContract]:
+expiry = _extract_expiry(row)
+strike = _extract_strike(row)
+option_type = _extract_option_type(row)
 
 ```
+if (
+    expiry is None
+    or strike is None
+    or option_type is None
+):
+    return None
+
+return OptionContract(
+    expiry=expiry,
+    strike=strike,
+    option_type=option_type,
+)
+```
+
+def _extract_contract_rows(
+payload: Any,
+) -> list[OptionContract]:
+if isinstance(payload, list):
+rows = payload
+
+```
+elif isinstance(payload, tuple):
+    rows = list(payload)
+
+elif isinstance(payload, Mapping):
+    records = payload.get(
+        "records",
+        payload,
+    )
+
+    if isinstance(records, Mapping):
+        rows = records.get(
+            "data",
+            [],
+        )
+
+    else:
+        rows = []
+
+else:
+    rows = []
+
 contracts: list[OptionContract] = []
 
 for row in rows:
-    row_expiry = _row_expiry(row)
-
-    if row_expiry != expiry:
+    if not isinstance(row, Mapping):
         continue
 
-    strike = _row_strike(row)
+    contract = _contract_from_row(row)
 
-    if strike is None:
-        continue
-
-    for option_type in ("CE", "PE"):
-        leg = _normalised_leg(
-            row,
-            option_type,
-        )
-
-        if leg is None:
-            continue
-
-        price = _leg_price(leg)
-
-        if price is None:
-            continue
-
-        contracts.append(
-            OptionContract(
-                expiry=expiry,
-                strike=strike,
-                option_type=option_type,
-                selection_mode="ATM",
-            )
-        )
+    if contract is not None:
+        contracts.append(contract)
 
 return contracts
+```
+
+def select_contract(
+contracts: list[OptionContract],
+nifty_price: float,
+option_type: str,
+selection_mode: str = "ATM",
+) -> OptionContract:
+if not contracts:
+raise OptionSelectionError(
+"No option contracts supplied."
+)
+
+```
+if nifty_price <= 0:
+    raise OptionSelectionError(
+        "NIFTY price must be positive."
+    )
+
+requested_type = _normalise_option_type(
+    option_type
+)
+
+mode = str(
+    selection_mode
+).upper().strip()
+
+if mode not in {
+    "ATM",
+    "ITM",
+    "OTM",
+}:
+    raise OptionSelectionError(
+        "selection_mode must be ATM, ITM, or OTM."
+    )
+
+candidates = [
+    contract
+    for contract in contracts
+    if contract.option_type
+    == requested_type
+]
+
+if not candidates:
+    raise OptionSelectionError(
+        f"No {requested_type} contracts available."
+    )
+
+if mode == "ATM":
+    return min(
+        candidates,
+        key=lambda contract: (
+            abs(
+                contract.strike
+                - nifty_price
+            ),
+            contract.strike,
+        ),
+    )
+
+if requested_type == "CE":
+    if mode == "ITM":
+        itm = [
+            contract
+            for contract in candidates
+            if contract.strike <= nifty_price
+        ]
+
+        if itm:
+            return max(
+                itm,
+                key=lambda contract: contract.strike,
+            )
+
+    else:
+        otm = [
+            contract
+            for contract in candidates
+            if contract.strike >= nifty_price
+        ]
+
+        if otm:
+            return min(
+                otm,
+                key=lambda contract: contract.strike,
+            )
+
+else:
+    if mode == "ITM":
+        itm = [
+            contract
+            for contract in candidates
+            if contract.strike >= nifty_price
+        ]
+
+        if itm:
+            return min(
+                itm,
+                key=lambda contract: contract.strike,
+            )
+
+    else:
+        otm = [
+            contract
+            for contract in candidates
+            if contract.strike <= nifty_price
+        ]
+
+        if otm:
+            return max(
+                otm,
+                key=lambda contract: contract.strike,
+            )
+
+return min(
+    candidates,
+    key=lambda contract: abs(
+        contract.strike
+        - nifty_price
+    ),
+)
 ```
 
 def select_live_contract(
@@ -389,48 +328,83 @@ nifty_price: float,
 expiry: date,
 option_type: str,
 selection_mode: str = "ATM",
-strike_interval: int = 50,
 ) -> OptionContract:
-"""
-Select a requested contract only if it exists in the
-supplied live option-chain payload and has a valid price.
+requested_type = _normalise_option_type(
+option_type
+)
 
 ```
-The payload may be either the raw NSE dictionary or the
-normalized NiftyOptionChain returned by nse_live_data.
-"""
-
-requested = select_contract(
-    nifty_price=nifty_price,
-    expiry=expiry,
-    option_type=option_type,
-    selection_mode=selection_mode,
-    strike_interval=strike_interval,
+contracts = _extract_contract_rows(
+    option_chain_payload
 )
 
-available = _available_contracts(
+candidates = [
+    contract
+    for contract in contracts
+    if contract.expiry == expiry
+    and contract.option_type
+    == requested_type
+]
+
+if candidates:
+    return select_contract(
+        contracts=candidates,
+        nifty_price=nifty_price,
+        option_type=requested_type,
+        selection_mode=selection_mode,
+    )
+
+if isinstance(
     option_chain_payload,
-    expiry,
-)
+    Mapping,
+):
+    records = option_chain_payload.get(
+        "records",
+        {},
+    )
 
-for contract in available:
-    if (
-        contract.strike == requested.strike
-        and contract.option_type == requested.option_type
-        and contract.expiry == requested.expiry
-    ):
-        return OptionContract(
-            expiry=contract.expiry,
-            strike=contract.strike,
-            option_type=contract.option_type,
-            selection_mode=selection_mode,
+    if isinstance(records, Mapping):
+        data = records.get(
+            "data",
+            [],
         )
 
+        fallback_contracts: list[
+            OptionContract
+        ] = []
+
+        for row in data:
+            if not isinstance(row, Mapping):
+                continue
+
+            row_expiry = _extract_expiry(row)
+            row_strike = _extract_strike(row)
+
+            if (
+                row_expiry != expiry
+                or row_strike is None
+            ):
+                continue
+
+            fallback_contracts.append(
+                OptionContract(
+                    expiry=expiry,
+                    strike=row_strike,
+                    option_type=requested_type,
+                )
+            )
+
+        if fallback_contracts:
+            return select_contract(
+                contracts=fallback_contracts,
+                nifty_price=nifty_price,
+                option_type=requested_type,
+                selection_mode=selection_mode,
+            )
+
 raise OptionSelectionError(
-    "Requested option contract is not available "
-    "with a valid live price: "
-    f"{requested.option_type} "
-    f"{requested.strike} "
-    f"{requested.expiry}."
+    "No matching live option contract found "
+    f"for expiry {expiry} and "
+    f"option type {requested_type}."
 )
 ```
