@@ -1,4 +1,3 @@
-```yaml
 name: NIFTY BTST 9:30 AM Exit
 
 on:
@@ -54,4 +53,3 @@ jobs:
             git commit -m "Close BTST position state"
             git push
           fi
-```
