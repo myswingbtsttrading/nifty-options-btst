@@ -59,4 +59,3 @@ def test_notifier_requires_telegram_credentials():
     assert "TELEGRAM_TOKEN" in source
     assert "TELEGRAM_CHAT_ID" in source
     assert "sendMessage" in source
-```
