@@ -1,11 +1,12 @@
-name: NIFTY BTST 9:15 AM Exit
+```yaml
+name: NIFTY BTST 9:30 AM Exit
 
 on:
   workflow_dispatch:
 
   schedule:
-    # 09:15 IST = 03:45 UTC
-    - cron: "45 3 * * 1-5"
+    # 09:30 IST = 04:00 UTC
+    - cron: "0 4 * * 1-5"
 
 permissions:
   contents: write
@@ -31,12 +32,12 @@ jobs:
       - name: Run test suite
         run: python -m pytest -q
 
-      - name: Generate 9:15 AM SELL alert
+      - name: Generate 9:30 AM SELL alert
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python main.py --mode 915
+          python main.py --mode 930
 
       - name: Remove closed BTST position state
         run: |
@@ -53,3 +54,4 @@ jobs:
             git commit -m "Close BTST position state"
             git push
           fi
+```
