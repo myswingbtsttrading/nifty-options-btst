@@ -47,6 +47,19 @@ def round_to_strike(
     )
 
 
+def select_atm_strike(
+    spot: float,
+    strike_step: int = 50,
+) -> float:
+    """
+    Backward-compatible helper returning the ATM strike.
+    """
+    return round_to_strike(
+        spot=spot,
+        strike_step=strike_step,
+    )
+
+
 def _normalise_option_type(
     option_type: str,
 ) -> str:
@@ -449,7 +462,7 @@ def select_atm_contract(
     lot_size: int = 65,
 ) -> OptionContract:
     """
-    Backward-compatible ATM selector.
+    Backward-compatible ATM contract selector.
     """
     return select_contract(
         option_chain=option_chain,
