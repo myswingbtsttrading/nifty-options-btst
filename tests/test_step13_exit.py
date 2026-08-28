@@ -1,4 +1,3 @@
-```python
 import json
 from datetime import datetime
 
@@ -216,4 +215,3 @@ def test_run_915_remains_backward_compatible(
     main.run_915()
 
     assert calls == [True]
-```
