@@ -1,5 +1,6 @@
+```python
 import json
-from datetime import date, datetime
+from datetime import datetime
 
 import main
 
@@ -77,7 +78,7 @@ def test_sell_message_calculates_profit():
             8,
             28,
             9,
-            15,
+            30,
         ),
     )
 
@@ -86,6 +87,7 @@ def test_sell_message_calculates_profit():
     assert "Exit Premium: ₹120.00" in message
     assert "P/L: ₹1,300.00" in message
     assert "P/L %: +20.00%" in message
+    assert "9:30 AM" in message
 
 
 def test_sell_message_calculates_loss():
@@ -97,16 +99,17 @@ def test_sell_message_calculates_loss():
             8,
             28,
             9,
-            15,
+            30,
         ),
     )
 
     assert "LOSS" in message
     assert "P/L: ₹-650.00" in message
     assert "P/L %: -10.00%" in message
+    assert "9:30 AM" in message
 
 
-def test_run_915_fetches_actual_option_premium_and_sends_alert(
+def test_run_930_fetches_actual_option_premium_and_sends_alert(
     monkeypatch,
     tmp_path,
 ):
@@ -135,7 +138,7 @@ def test_run_915_fetches_actual_option_premium_and_sends_alert(
             8,
             28,
             9,
-            15,
+            30,
         )
 
     class FakeChain:
@@ -161,7 +164,7 @@ def test_run_915_fetches_actual_option_premium_and_sends_alert(
         lambda message: calls.append(message),
     )
 
-    main.run_915()
+    main.run_930()
 
     assert len(calls) == 1
     assert "NIFTY BTST SELL ALERT" in calls[0]
@@ -171,7 +174,7 @@ def test_run_915_fetches_actual_option_premium_and_sends_alert(
     assert not state_file.exists()
 
 
-def test_run_915_requires_position_state(
+def test_run_930_requires_position_state(
     monkeypatch,
     tmp_path,
 ):
@@ -187,7 +190,7 @@ def test_run_915_requires_position_state(
     )
 
     try:
-        main.run_915()
+        main.run_930()
     except Exception as exc:
         assert (
             "No BTST position state found"
@@ -197,3 +200,20 @@ def test_run_915_requires_position_state(
         raise AssertionError(
             "Expected missing BTST position state to fail."
         )
+
+
+def test_run_915_remains_backward_compatible(
+    monkeypatch,
+):
+    calls = []
+
+    monkeypatch.setattr(
+        main,
+        "run_930",
+        lambda: calls.append(True),
+    )
+
+    main.run_915()
+
+    assert calls == [True]
+```
