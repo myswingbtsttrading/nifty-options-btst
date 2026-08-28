@@ -1,4 +1,3 @@
-```python
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -557,4 +556,3 @@ def select_live_contract(
         selection_mode=selection_mode,
         lot_size=lot_size,
     )
-```
