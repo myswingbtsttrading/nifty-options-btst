@@ -219,36 +219,51 @@ def _parse_nse_datetime(
         return datetime.now()
 
 
-def _parse_expiry(
-    value: Any,
-) -> date | None:
-    if isinstance(value, datetime):
-        return value.date()
+def nearest_nifty_expiry(
+    chain: (
+        NiftyOptionChain
+        | dict[str, Any]
+    ),
+    today: date | None = None,
+) -> date:
+    if isinstance(
+        chain,
+        NiftyOptionChain,
+    ):
+        expiry_dates = tuple(
+            chain.expiry_dates
+        )
 
-    if isinstance(value, date):
-        return value
+        current_date = (
+            today
+            if today is not None
+            else chain.timestamp.date()
+        )
+    else:
+        expiry_dates = tuple(
+            available_nifty_expiries(
+                chain
+            )
+        )
 
-    if value is None:
-        return None
+        current_date = (
+            today
+            if today is not None
+            else date.today()
+        )
 
-    text = str(value).strip()
+    future_expiries = [
+        expiry
+        for expiry in expiry_dates
+        if expiry >= current_date
+    ]
 
-    formats = (
-        "%d-%b-%Y",
-        "%d-%m-%Y",
-        "%Y-%m-%d",
-    )
+    if not future_expiries:
+        raise LiveMarketDataError(
+            "NSE option chain contains no future NIFTY expiry."
+        )
 
-    for fmt in formats:
-        try:
-            return datetime.strptime(
-                text,
-                fmt,
-            ).date()
-        except ValueError:
-            continue
-
-    return None
+    return min(future_expiries)
 
 
 def _extract_quote_from_nse_payload(
