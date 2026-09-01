@@ -1,8 +1,9 @@
+```python
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Mapping
 
 
 class OptionSelectionError(Exception):
@@ -14,8 +15,9 @@ class OptionContract:
     expiry: date
     strike: float
     option_type: str
-    premium: float
+    premium: float = 0.0
     lot_size: int = 65
+    selection_mode: str = "ATM"
 
     @property
     def symbol(self) -> str:
@@ -25,47 +27,8 @@ class OptionContract:
         )
 
 
-def round_to_strike(
-    spot: float,
-    strike_step: int = 50,
-) -> float:
-    if strike_step <= 0:
-        raise ValueError(
-            "strike_step must be greater than zero."
-        )
-
-    if spot <= 0:
-        raise ValueError(
-            "spot must be greater than zero."
-        )
-
-    return float(
-        int(
-            (spot / strike_step) + 0.5
-        )
-        * strike_step
-    )
-
-
-def select_atm_strike(
-    spot: float,
-    strike_step: int = 50,
-) -> float:
-    """
-    Backward-compatible helper returning the ATM strike.
-    """
-    return round_to_strike(
-        spot=spot,
-        strike_step=strike_step,
-    )
-
-
-def _normalise_option_type(
-    option_type: str,
-) -> str:
-    value = str(
-        option_type
-    ).strip().upper()
+def _normalise_option_type(option_type: str) -> str:
+    value = str(option_type).strip().upper()
 
     if value not in {"CE", "PE"}:
         raise OptionSelectionError(
@@ -75,53 +38,83 @@ def _normalise_option_type(
     return value
 
 
-def _get_value(
-    row: Any,
-    *names: str,
-) -> Any:
-    if isinstance(row, Mapping):
-        for name in names:
-            if name in row:
-                return row[name]
-        return None
+def _normalise_selection_mode(selection_mode: str) -> str:
+    value = str(selection_mode).strip().upper()
 
-    for name in names:
-        if hasattr(row, name):
-            return getattr(row, name)
-
-    return None
-
-
-def _to_float(
-    value: Any,
-) -> Optional[float]:
-    if value is None:
-        return None
-
-    try:
-        result = float(
-            str(value).replace(",", "")
+    if value not in {"ATM", "ITM", "OTM"}:
+        raise OptionSelectionError(
+            "selection_mode must be ATM, ITM, or OTM."
         )
-    except (TypeError, ValueError):
-        return None
 
-    if result <= 0:
-        return None
-
-    return result
+    return value
 
 
-def _to_date(
-    value: Any,
-) -> Optional[date]:
-    if value is None:
-        return None
+def round_to_strike(
+    nifty_price: float,
+    strike_interval: int = 50,
+) -> int:
+    if nifty_price <= 0:
+        raise OptionSelectionError(
+            "nifty_price must be positive."
+        )
 
+    if strike_interval <= 0:
+        raise OptionSelectionError(
+            "strike_interval must be positive."
+        )
+
+    return int(
+        (float(nifty_price) / strike_interval + 0.5)
+    ) * strike_interval
+
+
+def select_atm_strike(
+    nifty_price: float,
+    strike_interval: int = 50,
+) -> int:
+    return round_to_strike(
+        nifty_price=nifty_price,
+        strike_interval=strike_interval,
+    )
+
+
+def select_strike(
+    nifty_price: float,
+    option_type: str,
+    selection_mode: str = "ATM",
+    strike_interval: int = 50,
+) -> int:
+    option_type = _normalise_option_type(option_type)
+    selection_mode = _normalise_selection_mode(selection_mode)
+
+    atm = select_atm_strike(
+        nifty_price=nifty_price,
+        strike_interval=strike_interval,
+    )
+
+    if selection_mode == "ATM":
+        return atm
+
+    if option_type == "CE":
+        if selection_mode == "ITM":
+            return atm - strike_interval
+        return atm + strike_interval
+
+    if selection_mode == "ITM":
+        return atm + strike_interval
+
+    return atm - strike_interval
+
+
+def _parse_expiry(value: Any) -> date | None:
     if isinstance(value, datetime):
         return value.date()
 
     if isinstance(value, date):
         return value
+
+    if value is None:
+        return None
 
     text = str(value).strip()
 
@@ -133,366 +126,233 @@ def _to_date(
         "%d-%m-%Y",
     ):
         try:
-            return datetime.strptime(
-                text,
-                fmt,
-            ).date()
+            return datetime.strptime(text, fmt).date()
         except ValueError:
             continue
 
     return None
 
 
-def _extract_expiry(
-    row: Any,
-) -> Optional[date]:
-    return _to_date(
-        _get_value(
-            row,
-            "expiry",
-            "Expiry",
-            "expiry_date",
-            "ExpiryDate",
+def _payload_rows(
+    option_chain_payload: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
+    records = option_chain_payload.get("records", {})
+
+    if not isinstance(records, Mapping):
+        raise OptionSelectionError(
+            "Option-chain records are invalid."
         )
-    )
 
+    rows = records.get("data", [])
 
-def _extract_strike(
-    row: Any,
-) -> Optional[float]:
-    return _to_float(
-        _get_value(
-            row,
-            "strike",
-            "Strike",
-            "strikePrice",
-            "strike_price",
+    if not isinstance(rows, list):
+        raise OptionSelectionError(
+            "Option-chain data is invalid."
         )
-    )
+
+    return [
+        row
+        for row in rows
+        if isinstance(row, Mapping)
+    ]
 
 
-def _extract_premium(
-    row: Any,
-) -> Optional[float]:
-    return _to_float(
-        _get_value(
-            row,
-            "premium",
-            "Premium",
-            "lastPrice",
-            "last_price",
-            "LTP",
-            "ltp",
-            "close",
-            "Close",
-            "option_price",
-        )
-    )
-
-
-def _extract_option_type(
-    row: Any,
-) -> Optional[str]:
-    value = _get_value(
-        row,
-        "option_type",
-        "OptionType",
-        "optionType",
-        "type",
-        "Type",
-        "instrumentType",
-    )
-
-    if value is None:
-        return None
-
-    value = str(value).strip().upper()
-
-    if value in {"CE", "PE"}:
-        return value
-
-    return None
-
-
-def _extract_lot_size(
-    row: Any,
-    default: int = 65,
-) -> int:
-    value = _get_value(
-        row,
-        "lot_size",
-        "lotSize",
-        "LotSize",
-        "qty",
-        "quantity",
-    )
-
-    try:
-        lot_size = int(float(value))
-    except (TypeError, ValueError):
-        lot_size = default
-
-    return lot_size if lot_size > 0 else default
-
-
-def _iter_rows(
-    option_chain: Any,
-) -> Iterable[Any]:
-    if option_chain is None:
-        return []
-
-    if isinstance(option_chain, Mapping):
-        for key in (
-            "records",
-            "data",
-            "options",
-            "chain",
-        ):
-            value = option_chain.get(key)
-
-            if (
-                isinstance(value, Iterable)
-                and not isinstance(
-                    value,
-                    (
-                        str,
-                        bytes,
-                        Mapping,
-                    ),
-                )
-            ):
-                return value
-
-        return []
-
-    if hasattr(option_chain, "data"):
-        value = option_chain.data
-
-        if (
-            isinstance(value, Iterable)
-            and not isinstance(
-                value,
-                (
-                    str,
-                    bytes,
-                    Mapping,
-                ),
-            )
-        ):
-            return value
-
-    if (
-        isinstance(option_chain, Iterable)
-        and not isinstance(
-            option_chain,
-            (
-                str,
-                bytes,
-                Mapping,
-            ),
-        )
-    ):
-        return option_chain
-
-    return []
-
-
-def _build_candidates(
-    option_chain: Any,
+def _find_live_contract(
+    option_chain_payload: Mapping[str, Any],
+    nifty_price: float,
+    expiry: date,
     option_type: str,
-    expiry: Optional[date],
-):
-    candidates = []
+    selection_mode: str,
+    strike_interval: int,
+    lot_size: int,
+) -> OptionContract:
+    option_type = _normalise_option_type(option_type)
+    selection_mode = _normalise_selection_mode(selection_mode)
 
-    for row in _iter_rows(option_chain):
-        row_type = _extract_option_type(row)
+    requested_strike = select_strike(
+        nifty_price=nifty_price,
+        option_type=option_type,
+        selection_mode=selection_mode,
+        strike_interval=strike_interval,
+    )
 
-        if row_type != option_type:
+    candidates: list[OptionContract] = []
+
+    for row in _payload_rows(option_chain_payload):
+        row_expiry = _parse_expiry(
+            row.get("expiryDate")
+            or row.get("expiry")
+        )
+
+        if row_expiry != expiry:
             continue
 
-        row_expiry = _extract_expiry(row)
-
-        if (
-            expiry is not None
-            and row_expiry != expiry
+        try:
+            strike = float(row["strikePrice"])
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
         ):
             continue
 
-        strike = _extract_strike(row)
-        premium = _extract_premium(row)
+        leg = row.get(option_type)
 
-        if (
-            strike is None
-            or premium is None
+        if not isinstance(leg, Mapping):
+            continue
+
+        premium = leg.get("lastPrice")
+
+        if premium is None:
+            premium = leg.get("close")
+
+        try:
+            premium = float(premium)
+        except (
+            TypeError,
+            ValueError,
         ):
+            continue
+
+        if premium <= 0:
             continue
 
         candidates.append(
-            (
-                row,
-                strike,
-                premium,
-                row_expiry,
+            OptionContract(
+                expiry=expiry,
+                strike=strike,
+                option_type=option_type,
+                premium=premium,
+                lot_size=lot_size,
+                selection_mode=selection_mode,
             )
         )
-
-    return candidates
-
-
-def select_contract(
-    option_chain: Any,
-    spot: float,
-    option_type: str,
-    expiry: Optional[date] = None,
-    strike_step: int = 50,
-    selection_mode: str = "ATM",
-    lot_size: int = 65,
-) -> OptionContract:
-    if spot <= 0:
-        raise OptionSelectionError(
-            "spot must be greater than zero."
-        )
-
-    option_type = _normalise_option_type(
-        option_type
-    )
-
-    mode = str(
-        selection_mode
-    ).strip().upper()
-
-    if mode not in {
-        "ATM",
-        "ITM",
-        "OTM",
-    }:
-        raise OptionSelectionError(
-            "selection_mode must be ATM, ITM, or OTM."
-        )
-
-    candidates = _build_candidates(
-        option_chain=option_chain,
-        option_type=option_type,
-        expiry=expiry,
-    )
 
     if not candidates:
         raise OptionSelectionError(
-            "No valid option contract found "
-            f"for {option_type}."
+            "Requested option contract is not available "
+            "with a valid live price."
         )
 
-    def distance(item):
-        return abs(
-            item[1] - spot
-        )
+    exact = [
+        contract
+        for contract in candidates
+        if contract.strike == requested_strike
+    ]
 
-    if mode == "ATM":
-        selected = min(
-            candidates,
-            key=distance,
-        )
+    if exact:
+        return exact[0]
 
-    elif mode == "ITM":
-        if option_type == "CE":
-            preferred = [
-                item
-                for item in candidates
-                if item[1] <= spot
-            ]
-        else:
-            preferred = [
-                item
-                for item in candidates
-                if item[1] >= spot
-            ]
-
-        selected = min(
-            preferred or candidates,
-            key=distance,
-        )
-
-    else:
-        if option_type == "CE":
-            preferred = [
-                item
-                for item in candidates
-                if item[1] >= spot
-            ]
-        else:
-            preferred = [
-                item
-                for item in candidates
-                if item[1] <= spot
-            ]
-
-        selected = min(
-            preferred or candidates,
-            key=distance,
-        )
-
-    row, strike, premium, selected_expiry = selected
-
-    if selected_expiry is None:
-        if expiry is None:
-            raise OptionSelectionError(
-                "Selected contract has no expiry."
-            )
-
-        selected_expiry = expiry
-
-    return OptionContract(
-        expiry=selected_expiry,
-        strike=float(strike),
-        option_type=option_type,
-        premium=float(premium),
-        lot_size=_extract_lot_size(
-            row,
-            default=lot_size,
+    nearest = min(
+        candidates,
+        key=lambda contract: abs(
+            contract.strike - requested_strike
         ),
+    )
+
+    raise OptionSelectionError(
+        "Requested option contract is not available "
+        f"at strike {requested_strike}."
+    )
+
+
+def select_contract(
+    nifty_price: float,
+    expiry: date,
+    option_type: str,
+    selection_mode: str = "ATM",
+    strike_interval: int = 50,
+    option_chain: Any = None,
+    lot_size: int = 65,
+) -> OptionContract:
+    """
+    Backward-compatible historical contract selector.
+
+    The existing repository API uses nifty_price= and expiry=.
+    An option-chain payload is optional for compatibility.
+    """
+    option_type = _normalise_option_type(option_type)
+    selection_mode = _normalise_selection_mode(selection_mode)
+
+    if not isinstance(expiry, date):
+        raise OptionSelectionError(
+            "expiry must be a date."
+        )
+
+    strike = select_strike(
+        nifty_price=nifty_price,
+        option_type=option_type,
+        selection_mode=selection_mode,
+        strike_interval=strike_interval,
+    )
+
+    if option_chain is None:
+        return OptionContract(
+            expiry=expiry,
+            strike=strike,
+            option_type=option_type,
+            premium=0.0,
+            lot_size=lot_size,
+            selection_mode=selection_mode,
+        )
+
+    return select_live_contract(
+        option_chain_payload=option_chain,
+        nifty_price=nifty_price,
+        expiry=expiry,
+        option_type=option_type,
+        selection_mode=selection_mode,
+        strike_interval=strike_interval,
+        lot_size=lot_size,
     )
 
 
 def select_atm_contract(
-    option_chain: Any,
-    spot: float,
+    nifty_price: float,
+    expiry: date,
     option_type: str,
-    expiry: Optional[date] = None,
-    strike_step: int = 50,
+    strike_interval: int = 50,
     lot_size: int = 65,
 ) -> OptionContract:
-    """
-    Backward-compatible ATM contract selector.
-    """
     return select_contract(
-        option_chain=option_chain,
-        spot=spot,
-        option_type=option_type,
+        nifty_price=nifty_price,
         expiry=expiry,
-        strike_step=strike_step,
+        option_type=option_type,
         selection_mode="ATM",
+        strike_interval=strike_interval,
         lot_size=lot_size,
     )
 
 
 def select_live_contract(
-    option_chain: Any,
-    spot: float,
+    option_chain_payload: Mapping[str, Any],
+    nifty_price: float,
+    expiry: date,
     option_type: str,
-    expiry: Optional[date] = None,
-    strike_step: int = 50,
     selection_mode: str = "ATM",
+    strike_interval: int = 50,
     lot_size: int = 65,
 ) -> OptionContract:
-    """
-    Compatibility wrapper used by live_signal_engine.py.
-    """
-    return select_contract(
-        option_chain=option_chain,
-        spot=spot,
-        option_type=option_type,
+    if not isinstance(
+        option_chain_payload,
+        Mapping,
+    ):
+        raise OptionSelectionError(
+            "option_chain_payload must be a mapping."
+        )
+
+    if nifty_price <= 0:
+        raise OptionSelectionError(
+            "nifty_price must be positive."
+        )
+
+    return _find_live_contract(
+        option_chain_payload=option_chain_payload,
+        nifty_price=nifty_price,
         expiry=expiry,
-        strike_step=strike_step,
+        option_type=option_type,
         selection_mode=selection_mode,
+        strike_interval=strike_interval,
         lot_size=lot_size,
     )
+```
