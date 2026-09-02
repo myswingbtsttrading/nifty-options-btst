@@ -1,4 +1,3 @@
-```python
 import json
 from datetime import date, datetime
 from pathlib import Path
@@ -460,4 +459,3 @@ def test_main_supports_930_mode():
 
     assert '"930"' in parser_source
     assert 'args.mode in {' in parser_source
-```
