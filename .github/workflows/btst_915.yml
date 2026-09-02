@@ -58,6 +58,71 @@ jobs:
             echo "No BTST exit record created."
           fi
 
+      - name: Validate exit record
+        run: |
+          EXIT_FILE="data/last_btst_exit.json"
+
+          if [ ! -f "$EXIT_FILE" ]; then
+            echo "No exit record created."
+            exit 0
+          fi
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("data/last_btst_exit.json")
+          payload = json.loads(path.read_text(encoding="utf-8"))
+
+          required = {
+              "status",
+              "closed_at",
+              "entry_timestamp",
+              "exit_timestamp",
+              "direction",
+              "option_type",
+              "strike",
+              "expiry",
+              "entry_price",
+              "exit_price",
+              "quantity",
+              "lots",
+              "pnl",
+              "pnl_pct",
+          }
+
+          missing = sorted(required - payload.keys())
+
+          if missing:
+              raise SystemExit(
+                  f"Invalid exit record. Missing fields: {missing}"
+              )
+
+          if payload["status"] != "CLOSED":
+              raise SystemExit(
+                  f"Invalid exit status: {payload['status']}"
+              )
+
+          if payload["option_type"] not in {"CE", "PE"}:
+              raise SystemExit(
+                  f"Invalid option type: {payload['option_type']}"
+              )
+
+          if float(payload["entry_price"]) <= 0:
+              raise SystemExit("Invalid entry price")
+
+          if float(payload["exit_price"]) <= 0:
+              raise SystemExit("Invalid exit price")
+
+          if int(payload["quantity"]) <= 0:
+              raise SystemExit("Invalid quantity")
+
+          if int(payload["lots"]) <= 0:
+              raise SystemExit("Invalid lots")
+
+          print("BTST exit record validation passed.")
+          PY
+
       - name: Remove closed BTST position state
         run: |
           git config user.name "github-actions[bot]"
