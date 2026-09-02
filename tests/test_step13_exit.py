@@ -351,8 +351,18 @@ def test_run_930_keeps_state_when_telegram_fails(
         main.run_930()
 
     assert state_file.exists()
-    assert not exit_file.exists()
+    assert exit_file.exists()
 
+    exit_payload = json.loads(
+        exit_file.read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert exit_payload["status"] == "CLOSED"
+    assert exit_payload["exit_price"] == 120.0
+    assert exit_payload["pnl"] == 1300.0
+    assert exit_payload["pnl_pct"] == 20.0
 
 def test_run_930_keeps_state_when_live_premium_is_invalid(
     monkeypatch,
