@@ -9,10 +9,7 @@ from pathlib import Path
 from live_market_data import LiveMarketDataError
 from live_signal_engine import build_live_signal
 from notifier import send_alert
-from nse_live_data import (
-    fetch_nifty_option_chain,
-    find_option_quote,
-)
+from nse_live_data import fetch_nifty_option_chain, find_option_quote
 from yahoo_nifty_data import load_nifty_history
 
 
@@ -22,12 +19,6 @@ EXIT_FILE = DATA_DIR / "last_btst_exit.json"
 
 
 def _load_historical_nifty_rows():
-    """
-    Load recent NIFTY daily history from Yahoo Finance.
-
-    The current live NIFTY quote is intentionally not fetched here.
-    build_live_signal() owns the live quote and option-chain retrieval.
-    """
     rows = load_nifty_history(days=120)
 
     if len(rows) < 50:
@@ -41,10 +32,62 @@ def _load_historical_nifty_rows():
 
 def _format_signal_message(result) -> str:
     signal = result.signal
-    nifty_signal = result.nifty_signal
-    indicators = result.indicators
+
+    nifty_signal = getattr(
+        result,
+        "nifty_signal",
+        None,
+    )
+
+    indicators = getattr(
+        result,
+        "indicators",
+        None,
+    )
 
     if signal.decision != "BUY":
+        reason = getattr(
+            nifty_signal,
+            "reason",
+            "No qualifying BTST setup.",
+        )
+
+        ema20 = getattr(
+            indicators,
+            "ema20",
+            None,
+        )
+
+        ema50 = getattr(
+            indicators,
+            "ema50",
+            None,
+        )
+
+        rsi = getattr(
+            indicators,
+            "rsi",
+            None,
+        )
+
+        ema20_text = (
+            f"{ema20:.2f}"
+            if ema20 is not None
+            else "N/A"
+        )
+
+        ema50_text = (
+            f"{ema50:.2f}"
+            if ema50 is not None
+            else "N/A"
+        )
+
+        rsi_text = (
+            f"{rsi:.1f}"
+            if rsi is not None
+            else "N/A"
+        )
+
         return (
             "NIFTY BTST ALERT\n"
             "━━━━━━━━━━━━━━━━━━\n"
@@ -52,12 +95,48 @@ def _format_signal_message(result) -> str:
             f"NIFTY: ₹{signal.nifty_price:,.2f}\n"
             f"Decision: {signal.decision}\n"
             f"Confidence: {signal.confidence:.1f}%\n"
-            f"Reason: {nifty_signal.reason}\n"
-            f"EMA20: {indicators.ema20:.2f}\n"
-            f"EMA50: {indicators.ema50:.2f}\n"
-            f"RSI: {indicators.rsi:.1f}\n"
+            f"Reason: {reason}\n"
+            f"EMA20: {ema20_text}\n"
+            f"EMA50: {ema50_text}\n"
+            f"RSI: {rsi_text}\n"
             "\nNo BTST position recommended."
         )
+
+    ema20 = getattr(
+        indicators,
+        "ema20",
+        None,
+    )
+
+    ema50 = getattr(
+        indicators,
+        "ema50",
+        None,
+    )
+
+    rsi = getattr(
+        indicators,
+        "rsi",
+        None,
+    )
+
+    ema20_text = (
+        f"{ema20:.2f}"
+        if ema20 is not None
+        else "N/A"
+    )
+
+    ema50_text = (
+        f"{ema50:.2f}"
+        if ema50 is not None
+        else "N/A"
+    )
+
+    rsi_text = (
+        f"{rsi:.1f}"
+        if rsi is not None
+        else "N/A"
+    )
 
     return (
         "🚀 NIFTY BTST BUY ALERT\n"
@@ -76,20 +155,22 @@ def _format_signal_message(result) -> str:
         f"Risk/Reward: {signal.risk_reward_ratio:.2f}\n"
         f"Confidence: {signal.confidence:.1f}%\n\n"
         f"NIFTY: ₹{signal.nifty_price:,.2f}\n"
-        f"EMA20: {indicators.ema20:.2f}\n"
-        f"EMA50: {indicators.ema50:.2f}\n"
-        f"RSI: {indicators.rsi:.1f}\n\n"
+        f"EMA20: {ema20_text}\n"
+        f"EMA50: {ema50_text}\n"
+        f"RSI: {rsi_text}\n\n"
         "📌 BTST: Buy near 3 PM.\n"
         "📌 Exit/review next trading morning at 9:30 AM."
     )
 
 
-def _atomic_write_json(path: Path, payload: dict) -> None:
-    """
-    Atomically write JSON so an interrupted GitHub Actions run cannot
-    leave a partially-written state file.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _atomic_write_json(
+    path: Path,
+    payload: dict,
+) -> None:
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     temporary = path.with_name(
         f".{path.name}.tmp"
@@ -110,15 +191,9 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
 
 
 def _save_signal_state(signal) -> None:
-    """
-    Persist an actionable BUY signal.
-
-    Compact JSON is intentionally used because the state file is a
-    machine-readable production artifact and existing compatibility
-    tests expect compact output.
-    """
     if hasattr(signal, "to_dict"):
         payload = signal.to_dict()
+
     elif hasattr(signal, "to_json"):
         raw = signal.to_json()
 
@@ -131,6 +206,7 @@ def _save_signal_state(signal) -> None:
             raise LiveMarketDataError(
                 "BTST signal returned invalid JSON state."
             ) from exc
+
     else:
         raise LiveMarketDataError(
             "BTST signal does not provide to_dict() or to_json()."
@@ -349,9 +425,6 @@ def _save_exit_record(
     exit_price: float,
     exit_timestamp,
 ) -> None:
-    """
-    Persist the completed transaction before active state removal.
-    """
     entry_price = float(
         position["entry_price"]
     )
@@ -400,12 +473,6 @@ def _save_exit_record(
 
 
 def _load_existing_exit_record() -> dict | None:
-    """
-    Return the last completed exit record if it exists and is valid.
-
-    This is used only as an audit/idempotency guard. A CLOSED record
-    never replaces an active BUY state.
-    """
     if not EXIT_FILE.exists():
         return None
 
@@ -436,20 +503,14 @@ def _exit_record_matches_position(
     position: dict,
     exit_record: dict,
 ) -> bool:
-    """
-    Determine whether a previous CLOSED record belongs to the
-    currently stored BUY position.
-    """
     if not exit_record:
         return False
 
-    fields = (
+    for field in (
         "direction",
         "option_type",
         "expiry",
-    )
-
-    for field in fields:
+    ):
         if str(
             exit_record.get(field)
         ).upper() != str(
@@ -477,24 +538,20 @@ def _exit_record_matches_position(
 
 
 def _remove_active_state() -> None:
-    """
-    Remove the active position only after the completed exit has
-    been durably persisted.
-    """
     try:
         STATE_FILE.unlink()
     except FileNotFoundError:
         pass
 
 
-def run_3pm() -> None:
-    """
-    Generate the 3 PM BTST signal.
+def _remove_exit_record() -> None:
+    try:
+        EXIT_FILE.unlink()
+    except FileNotFoundError:
+        pass
 
-    Telegram is sent only for an actionable BUY.
-    A WAIT/NO TRADE result is printed but does not generate
-    a Telegram alert or position state.
-    """
+
+def run_3pm() -> None:
     historical_rows = _load_historical_nifty_rows()
 
     result = build_live_signal(
@@ -503,6 +560,15 @@ def run_3pm() -> None:
         lot_size=65,
         today=date.today(),
     )
+
+    # Check for an existing active position BEFORE formatting
+    # the message. This prevents a duplicate BUY from doing any
+    # unnecessary signal formatting or Telegram work.
+    if result.signal.decision == "BUY" and STATE_FILE.exists():
+        raise LiveMarketDataError(
+            "An active BTST BUY position already exists. "
+            "Refusing to create a duplicate position."
+        )
 
     message = _format_signal_message(
         result
@@ -513,15 +579,7 @@ def run_3pm() -> None:
     if result.signal.decision != "BUY":
         return
 
-    # Never overwrite an already-active overnight position.
-    if STATE_FILE.exists():
-        raise LiveMarketDataError(
-            "An active BTST BUY position already exists. "
-            "Refusing to create a duplicate position."
-        )
-
-    # Persist the exact signal before Telegram so a successful BUY
-    # can never exist only in the alert channel without state.
+    # Persist BUY state before sending Telegram.
     _save_signal_state(
         result.signal
     )
@@ -529,7 +587,8 @@ def run_3pm() -> None:
     try:
         send_alert(message)
     except Exception:
-        # Roll back the state if the BUY alert was not delivered.
+        # Telegram was not confirmed, so do not leave an active
+        # position that could be exited tomorrow without a BUY alert.
         try:
             STATE_FILE.unlink()
         except FileNotFoundError:
@@ -538,23 +597,13 @@ def run_3pm() -> None:
 
 
 def run_930() -> None:
-    """
-    Close the previous BTST position using the current live premium
-    of the exact stored option contract.
-
-    The active state is removed only after:
-      1. The exact contract is found.
-      2. A positive live premium is received.
-      3. The completed exit record is persisted.
-      4. The SELL Telegram alert succeeds.
-
-    A prior matching CLOSED audit record is treated as an
-    idempotency signal and prevents a duplicate SELL alert.
-    """
     position = _load_signal_state()
 
     existing_exit = _load_existing_exit_record()
 
+    # If a previous run completed the transaction but failed before
+    # removing the active state, finish cleanup without sending a
+    # duplicate SELL alert.
     if _exit_record_matches_position(
         position=position,
         exit_record=existing_exit,
@@ -616,9 +665,8 @@ def run_930() -> None:
         exit_timestamp=exit_timestamp,
     )
 
-    # Persist the completed transaction first. If this fails,
-    # Telegram is not sent and the active BUY remains available
-    # for a safe retry.
+    # Create the audit record before Telegram so the transaction
+    # itself is durable before the active state can be removed.
     _save_exit_record(
         position=position,
         exit_price=exit_price,
@@ -628,9 +676,12 @@ def run_930() -> None:
     try:
         send_alert(message)
     except Exception:
-        # Keep the active state because the SELL alert was not
-        # confirmed. The matching exit record makes the next run
-        # idempotent and prevents another market lookup/SELL alert.
+        # Compatibility and safety behavior:
+        # the active BUY remains available for retry, but the
+        # incomplete exit audit record is removed so the next run
+        # performs a fresh exit attempt instead of treating the
+        # failed alert as a completed transaction.
+        _remove_exit_record()
         raise
 
     print(message)
@@ -641,7 +692,6 @@ def run_930() -> None:
 def run_915() -> None:
     """
     Backward-compatible alias for the old 9:15 AM exit mode.
-
     Production scheduling is now 9:30 AM.
     """
     run_930()
@@ -685,11 +735,13 @@ def main() -> None:
 
     if args.mode == "3pm":
         run_3pm()
+
     elif args.mode in {
         "930",
         "915",
     }:
         run_930()
+
     else:
         run_smoke()
 
