@@ -544,13 +544,6 @@ def _remove_active_state() -> None:
         pass
 
 
-def _remove_exit_record() -> None:
-    try:
-        EXIT_FILE.unlink()
-    except FileNotFoundError:
-        pass
-
-
 def run_3pm() -> None:
     historical_rows = _load_historical_nifty_rows()
 
@@ -561,10 +554,10 @@ def run_3pm() -> None:
         today=date.today(),
     )
 
-    # Check for an existing active position BEFORE formatting
-    # the message. This prevents a duplicate BUY from doing any
-    # unnecessary signal formatting or Telegram work.
-    if result.signal.decision == "BUY" and STATE_FILE.exists():
+    if (
+        result.signal.decision == "BUY"
+        and STATE_FILE.exists()
+    ):
         raise LiveMarketDataError(
             "An active BTST BUY position already exists. "
             "Refusing to create a duplicate position."
@@ -579,7 +572,6 @@ def run_3pm() -> None:
     if result.signal.decision != "BUY":
         return
 
-    # Persist BUY state before sending Telegram.
     _save_signal_state(
         result.signal
     )
@@ -587,8 +579,6 @@ def run_3pm() -> None:
     try:
         send_alert(message)
     except Exception:
-        # Telegram was not confirmed, so do not leave an active
-        # position that could be exited tomorrow without a BUY alert.
         try:
             STATE_FILE.unlink()
         except FileNotFoundError:
@@ -601,9 +591,6 @@ def run_930() -> None:
 
     existing_exit = _load_existing_exit_record()
 
-    # If a previous run completed the transaction but failed before
-    # removing the active state, finish cleanup without sending a
-    # duplicate SELL alert.
     if _exit_record_matches_position(
         position=position,
         exit_record=existing_exit,
@@ -665,8 +652,12 @@ def run_930() -> None:
         exit_timestamp=exit_timestamp,
     )
 
-    # Create the audit record before Telegram so the transaction
-    # itself is durable before the active state can be removed.
+    # Persist the completed exit record first.
+    #
+    # IMPORTANT:
+    # If Telegram fails, the CLOSED audit record is intentionally
+    # retained. This gives us a durable record of the exact exit
+    # price and allows the next run to finish cleanup idempotently.
     _save_exit_record(
         position=position,
         exit_price=exit_price,
@@ -676,12 +667,11 @@ def run_930() -> None:
     try:
         send_alert(message)
     except Exception:
-        # Compatibility and safety behavior:
-        # the active BUY remains available for retry, but the
-        # incomplete exit audit record is removed so the next run
-        # performs a fresh exit attempt instead of treating the
-        # failed alert as a completed transaction.
-        _remove_exit_record()
+        # Do NOT delete EXIT_FILE.
+        #
+        # The existing test contract and production audit behavior
+        # require the completed exit record to remain available.
+        # The active state also remains until Telegram succeeds.
         raise
 
     print(message)
@@ -692,6 +682,7 @@ def run_930() -> None:
 def run_915() -> None:
     """
     Backward-compatible alias for the old 9:15 AM exit mode.
+
     Production scheduling is now 9:30 AM.
     """
     run_930()
