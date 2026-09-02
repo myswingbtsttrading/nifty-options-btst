@@ -9,7 +9,10 @@ from pathlib import Path
 from live_market_data import LiveMarketDataError
 from live_signal_engine import build_live_signal
 from notifier import send_alert
-from nse_live_data import fetch_nifty_option_chain, find_option_quote
+from nse_live_data import (
+    fetch_nifty_option_chain,
+    find_option_quote,
+)
 from yahoo_nifty_data import load_nifty_history
 
 
@@ -32,18 +35,8 @@ def _load_historical_nifty_rows():
 
 def _format_signal_message(result) -> str:
     signal = result.signal
-
-    nifty_signal = getattr(
-        result,
-        "nifty_signal",
-        None,
-    )
-
-    indicators = getattr(
-        result,
-        "indicators",
-        None,
-    )
+    nifty_signal = getattr(result, "nifty_signal", None)
+    indicators = getattr(result, "indicators", None)
 
     if signal.decision != "BUY":
         reason = getattr(
@@ -52,36 +45,20 @@ def _format_signal_message(result) -> str:
             "No qualifying BTST setup.",
         )
 
-        ema20 = getattr(
-            indicators,
-            "ema20",
-            None,
-        )
-
-        ema50 = getattr(
-            indicators,
-            "ema50",
-            None,
-        )
-
-        rsi = getattr(
-            indicators,
-            "rsi",
-            None,
-        )
+        ema20 = getattr(indicators, "ema20", None)
+        ema50 = getattr(indicators, "ema50", None)
+        rsi = getattr(indicators, "rsi", None)
 
         ema20_text = (
             f"{ema20:.2f}"
             if ema20 is not None
             else "N/A"
         )
-
         ema50_text = (
             f"{ema50:.2f}"
             if ema50 is not None
             else "N/A"
         )
-
         rsi_text = (
             f"{rsi:.1f}"
             if rsi is not None
@@ -102,36 +79,20 @@ def _format_signal_message(result) -> str:
             "\nNo BTST position recommended."
         )
 
-    ema20 = getattr(
-        indicators,
-        "ema20",
-        None,
-    )
-
-    ema50 = getattr(
-        indicators,
-        "ema50",
-        None,
-    )
-
-    rsi = getattr(
-        indicators,
-        "rsi",
-        None,
-    )
+    ema20 = getattr(indicators, "ema20", None)
+    ema50 = getattr(indicators, "ema50", None)
+    rsi = getattr(indicators, "rsi", None)
 
     ema20_text = (
         f"{ema20:.2f}"
         if ema20 is not None
         else "N/A"
     )
-
     ema50_text = (
         f"{ema50:.2f}"
         if ema50 is not None
         else "N/A"
     )
-
     rsi_text = (
         f"{rsi:.1f}"
         if rsi is not None
@@ -150,10 +111,14 @@ def _format_signal_message(result) -> str:
         f"Target: ₹{signal.target:,.2f}\n\n"
         f"Lots: {signal.lots}\n"
         f"Quantity: {signal.quantity}\n"
-        f"Capital Required: ₹{signal.capital_required:,.2f}\n"
-        f"Planned Risk: ₹{signal.planned_risk:,.2f}\n"
-        f"Risk/Reward: {signal.risk_reward_ratio:.2f}\n"
-        f"Confidence: {signal.confidence:.1f}%\n\n"
+        f"Capital Required: "
+        f"₹{signal.capital_required:,.2f}\n"
+        f"Planned Risk: "
+        f"₹{signal.planned_risk:,.2f}\n"
+        f"Risk/Reward: "
+        f"{signal.risk_reward_ratio:.2f}\n"
+        f"Confidence: "
+        f"{signal.confidence:.1f}%\n\n"
         f"NIFTY: ₹{signal.nifty_price:,.2f}\n"
         f"EMA20: {ema20_text}\n"
         f"EMA50: {ema50_text}\n"
@@ -176,18 +141,21 @@ def _atomic_write_json(
         f".{path.name}.tmp"
     )
 
-    temporary.write_text(
-        json.dumps(
-            payload,
-            separators=(",", ":"),
-        ),
-        encoding="utf-8",
-    )
-
-    os.replace(
-        temporary,
-        path,
-    )
+    try:
+        temporary.write_text(
+            json.dumps(
+                payload,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        os.replace(
+            temporary,
+            path,
+        )
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def _save_signal_state(signal) -> None:
@@ -214,7 +182,7 @@ def _save_signal_state(signal) -> None:
 
     if not isinstance(payload, dict):
         raise LiveMarketDataError(
-            "BTST signal state must be a JSON object."
+            "BTST signal returned invalid state payload."
         )
 
     _atomic_write_json(
@@ -233,7 +201,7 @@ def _load_signal_state() -> dict:
     try:
         payload = json.loads(
             STATE_FILE.read_text(
-                encoding="utf-8"
+                encoding="utf-8",
             )
         )
     except (
@@ -324,7 +292,10 @@ def _load_signal_state() -> dict:
         payload["option_type"]
     ).upper()
 
-    if option_type not in {"CE", "PE"}:
+    if option_type not in {
+        "CE",
+        "PE",
+    }:
         raise LiveMarketDataError(
             "Stored BTST option_type must be CE or PE."
         )
@@ -425,6 +396,11 @@ def _save_exit_record(
     exit_price: float,
     exit_timestamp,
 ) -> None:
+    DATA_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
     entry_price = float(
         position["entry_price"]
     )
@@ -472,14 +448,14 @@ def _save_exit_record(
     )
 
 
-def _load_existing_exit_record() -> dict | None:
+def _load_existing_exit_record():
     if not EXIT_FILE.exists():
         return None
 
     try:
         payload = json.loads(
             EXIT_FILE.read_text(
-                encoding="utf-8"
+                encoding="utf-8",
             )
         )
     except (
@@ -503,32 +479,66 @@ def _exit_record_matches_position(
     position: dict,
     exit_record: dict,
 ) -> bool:
-    if not exit_record:
+    if not isinstance(exit_record, dict):
         return False
 
-    for field in (
-        "direction",
-        "option_type",
-        "expiry",
-    ):
+    # Only a completed CLOSED record can make the
+    # exit process idempotent.
+    if str(
+        exit_record.get("status", "")
+    ).upper() != "CLOSED":
+        return False
+
+    try:
         if str(
-            exit_record.get(field)
+            exit_record.get("direction", "")
         ).upper() != str(
-            position.get(field)
+            position["direction"]
         ).upper():
             return False
 
-    try:
-        return (
-            float(exit_record["strike"])
-            == float(position["strike"])
-            and float(exit_record["entry_price"])
-            == float(position["entry_price"])
-            and int(exit_record["quantity"])
-            == int(position["quantity"])
-            and int(exit_record["lots"])
-            == int(position["lots"])
-        )
+        if str(
+            exit_record.get("option_type", "")
+        ).upper() != str(
+            position["option_type"]
+        ).upper():
+            return False
+
+        if str(
+            exit_record.get("expiry", "")
+        ) != str(
+            position["expiry"]
+        ):
+            return False
+
+        if float(
+            exit_record.get("strike")
+        ) != float(
+            position["strike"]
+        ):
+            return False
+
+        if float(
+            exit_record.get("entry_price")
+        ) != float(
+            position["entry_price"]
+        ):
+            return False
+
+        if int(
+            exit_record.get("quantity")
+        ) != int(
+            position["quantity"]
+        ):
+            return False
+
+        if int(
+            exit_record.get("lots")
+        ) != int(
+            position["lots"]
+        ):
+            return False
+
     except (
         KeyError,
         TypeError,
@@ -536,12 +546,12 @@ def _exit_record_matches_position(
     ):
         return False
 
+    return True
+
 
 def _remove_active_state() -> None:
-    try:
+    if STATE_FILE.exists():
         STATE_FILE.unlink()
-    except FileNotFoundError:
-        pass
 
 
 def run_3pm() -> None:
@@ -559,8 +569,7 @@ def run_3pm() -> None:
         and STATE_FILE.exists()
     ):
         raise LiveMarketDataError(
-            "An active BTST BUY position already exists. "
-            "Refusing to create a duplicate position."
+            "An active BTST BUY position already exists."
         )
 
     message = _format_signal_message(
@@ -579,10 +588,7 @@ def run_3pm() -> None:
     try:
         send_alert(message)
     except Exception:
-        try:
-            STATE_FILE.unlink()
-        except FileNotFoundError:
-            pass
+        _remove_active_state()
         raise
 
 
@@ -591,16 +597,17 @@ def run_930() -> None:
 
     existing_exit = _load_existing_exit_record()
 
-    if _exit_record_matches_position(
-        position=position,
-        exit_record=existing_exit,
+    if (
+        existing_exit is not None
+        and _exit_record_matches_position(
+            position,
+            existing_exit,
+        )
     ):
         print(
             "Matching CLOSED BTST exit record already exists. "
-            "Removing stale active state without sending "
-            "a duplicate SELL alert."
+            "Removing stale active state without sending a duplicate alert."
         )
-
         _remove_active_state()
         return
 
@@ -619,7 +626,10 @@ def run_930() -> None:
         position["option_type"]
     ).upper()
 
-    if option_type not in {"CE", "PE"}:
+    if option_type not in {
+        "CE",
+        "PE",
+    }:
         raise LiveMarketDataError(
             "Stored BTST option_type must be CE or PE."
         )
@@ -644,34 +654,25 @@ def run_930() -> None:
             "Current option premium must be positive."
         )
 
-    exit_timestamp = option_quote.timestamp
-
     message = _format_sell_message(
         position=position,
         exit_price=exit_price,
-        exit_timestamp=exit_timestamp,
+        exit_timestamp=option_quote.timestamp,
     )
 
-    # Persist the completed exit record first.
-    #
-    # IMPORTANT:
-    # If Telegram fails, the CLOSED audit record is intentionally
-    # retained. This gives us a durable record of the exact exit
-    # price and allows the next run to finish cleanup idempotently.
+    # Persist the completed transaction before Telegram.
+    # This guarantees the audit record survives an alert failure.
     _save_exit_record(
         position=position,
         exit_price=exit_price,
-        exit_timestamp=exit_timestamp,
+        exit_timestamp=option_quote.timestamp,
     )
 
     try:
         send_alert(message)
     except Exception:
-        # Do NOT delete EXIT_FILE.
-        #
-        # The existing test contract and production audit behavior
-        # require the completed exit record to remain available.
-        # The active state also remains until Telegram succeeds.
+        # Keep both records so the completed transaction remains
+        # auditable and the active state is not silently lost.
         raise
 
     print(message)
@@ -680,11 +681,6 @@ def run_930() -> None:
 
 
 def run_915() -> None:
-    """
-    Backward-compatible alias for the old 9:15 AM exit mode.
-
-    Production scheduling is now 9:30 AM.
-    """
     run_930()
 
 
