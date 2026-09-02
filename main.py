@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from live_market_data import LiveMarketDataError
@@ -17,14 +17,12 @@ from yahoo_nifty_data import load_nifty_history
 
 DATA_DIR = Path("data")
 STATE_FILE = DATA_DIR / "live_btst_signal.json"
+EXIT_FILE = DATA_DIR / "last_btst_exit.json"
 
 
 def _load_historical_nifty_rows():
     """
     Load recent NIFTY daily history from Yahoo Finance.
-
-    The current live NIFTY quote is intentionally not fetched here.
-    build_live_signal() owns the live quote and option-chain retrieval.
     """
     rows = load_nifty_history(
         days=120
@@ -39,9 +37,7 @@ def _load_historical_nifty_rows():
     return rows
 
 
-def _format_signal_message(
-    result,
-) -> str:
+def _format_signal_message(result) -> str:
     signal = result.signal
     nifty_signal = result.nifty_signal
     indicators = result.indicators
@@ -90,15 +86,12 @@ def _format_signal_message(
     )
 
 
-def _save_signal_state(
-    signal,
-) -> None:
+def _save_signal_state(signal) -> None:
     """
     Persist an actionable BUY signal.
 
-    State is intentionally serialized in compact JSON format
-    for backward compatibility with the existing repository
-    state format and tests.
+    Compact JSON is intentionally preserved for compatibility
+    with the existing repository state format.
     """
     DATA_DIR.mkdir(
         parents=True,
@@ -211,7 +204,104 @@ def _load_signal_state() -> dict:
             "Stored BTST position is not an active BUY."
         )
 
+    try:
+        entry_price = float(
+            payload["entry_price"]
+        )
+        quantity = int(
+            payload["quantity"]
+        )
+        lots = int(
+            payload["lots"]
+        )
+        strike = float(
+            payload["strike"]
+        )
+    except (
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise LiveMarketDataError(
+            "BTST position state contains invalid numeric values."
+        ) from exc
+
+    if entry_price <= 0:
+        raise LiveMarketDataError(
+            "Stored BTST entry premium must be positive."
+        )
+
+    if quantity <= 0:
+        raise LiveMarketDataError(
+            "Stored BTST quantity must be positive."
+        )
+
+    if lots <= 0:
+        raise LiveMarketDataError(
+            "Stored BTST lots must be positive."
+        )
+
+    if strike <= 0:
+        raise LiveMarketDataError(
+            "Stored BTST strike must be positive."
+        )
+
+    option_type = str(
+        payload["option_type"]
+    ).upper()
+
+    if option_type not in {
+        "CE",
+        "PE",
+    }:
+        raise LiveMarketDataError(
+            "Stored BTST option_type must be CE or PE."
+        )
+
+    try:
+        date.fromisoformat(
+            str(payload["expiry"])
+        )
+    except ValueError as exc:
+        raise LiveMarketDataError(
+            "Stored BTST expiry is invalid."
+        ) from exc
+
     return payload
+
+
+def _calculate_pnl(
+    entry_price: float,
+    exit_price: float,
+    quantity: int,
+) -> tuple[float, float]:
+    if entry_price <= 0:
+        raise LiveMarketDataError(
+            "Entry premium must be positive."
+        )
+
+    if exit_price <= 0:
+        raise LiveMarketDataError(
+            "Exit premium must be positive."
+        )
+
+    if quantity <= 0:
+        raise LiveMarketDataError(
+            "Quantity must be positive."
+        )
+
+    pnl = (
+        exit_price - entry_price
+    ) * quantity
+
+    pnl_pct = (
+        (
+            exit_price - entry_price
+        )
+        / entry_price
+        * 100.0
+    )
+
+    return pnl, pnl_pct
 
 
 def _format_sell_message(
@@ -227,16 +317,10 @@ def _format_sell_message(
         position["quantity"]
     )
 
-    pnl = (
-        exit_price - entry_price
-    ) * quantity
-
-    pnl_pct = (
-        (
-            exit_price - entry_price
-        )
-        / entry_price
-        * 100.0
+    pnl, pnl_pct = _calculate_pnl(
+        entry_price=entry_price,
+        exit_price=exit_price,
+        quantity=quantity,
     )
 
     if pnl > 0:
@@ -264,13 +348,75 @@ def _format_sell_message(
     )
 
 
+def _save_exit_record(
+    position: dict,
+    exit_price: float,
+    exit_timestamp,
+) -> None:
+    """
+    Persist the completed BTST transaction for audit/history.
+    """
+    DATA_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    entry_price = float(
+        position["entry_price"]
+    )
+
+    quantity = int(
+        position["quantity"]
+    )
+
+    pnl, pnl_pct = _calculate_pnl(
+        entry_price=entry_price,
+        exit_price=exit_price,
+        quantity=quantity,
+    )
+
+    payload = {
+        "status": "CLOSED",
+        "closed_at": datetime.now(
+            timezone.utc
+        ).isoformat(),
+        "entry_timestamp": position.get(
+            "timestamp"
+        ),
+        "exit_timestamp": str(
+            exit_timestamp
+        ),
+        "direction": position["direction"],
+        "option_type": position["option_type"],
+        "strike": float(
+            position["strike"]
+        ),
+        "expiry": position["expiry"],
+        "entry_price": entry_price,
+        "exit_price": exit_price,
+        "quantity": quantity,
+        "lots": int(
+            position["lots"]
+        ),
+        "pnl": pnl,
+        "pnl_pct": pnl_pct,
+    }
+
+    EXIT_FILE.write_text(
+        json.dumps(
+            payload,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+
+
 def run_3pm() -> None:
     """
     Generate the 3 PM BTST signal.
 
-    Telegram is sent only for an actionable BUY.
-    A WAIT/NO TRADE result is printed but does not generate
-    a Telegram alert or position state.
+    Only an actionable BUY creates Telegram output and
+    persistent active-position state.
     """
     historical_rows = _load_historical_nifty_rows()
 
@@ -299,27 +445,46 @@ def run_3pm() -> None:
 
 def run_930() -> None:
     """
-    Close the previous BTST position using the current option premium.
+    Close the previous BTST position using the current live
+    premium of the exact stored option contract.
 
-    This is the scheduled next-trading-day 9:30 AM exit process.
+    The active BUY state is removed only after the SELL alert
+    succeeds and the completed exit record is written.
     """
     position = _load_signal_state()
 
     chain = fetch_nifty_option_chain()
 
-    expiry = date.fromisoformat(
-        str(position["expiry"])
+    try:
+        expiry = date.fromisoformat(
+            str(position["expiry"])
+        )
+    except ValueError as exc:
+        raise LiveMarketDataError(
+            "Stored BTST expiry is invalid."
+        ) from exc
+
+    option_type = str(
+        position["option_type"]
+    ).upper()
+
+    if option_type not in {
+        "CE",
+        "PE",
+    }:
+        raise LiveMarketDataError(
+            "Stored BTST option_type must be CE or PE."
+        )
+
+    strike = float(
+        position["strike"]
     )
 
     option_quote = find_option_quote(
         payload=chain,
         expiry=expiry,
-        strike=float(
-            position["strike"]
-        ),
-        option_type=str(
-            position["option_type"]
-        ).upper(),
+        strike=strike,
+        option_type=option_type,
     )
 
     exit_price = float(
@@ -337,7 +502,15 @@ def run_930() -> None:
         exit_timestamp=option_quote.timestamp,
     )
 
+    # Do not remove the active BUY before Telegram succeeds.
     send_alert(message)
+
+    # Preserve the completed trade before deleting the active state.
+    _save_exit_record(
+        position=position,
+        exit_price=exit_price,
+        exit_timestamp=option_quote.timestamp,
+    )
 
     print(message)
 
@@ -347,9 +520,9 @@ def run_930() -> None:
 
 def run_915() -> None:
     """
-    Backward-compatible alias for the old 9:15 AM exit mode.
+    Backward-compatible alias for the historical 9:15 AM mode.
 
-    The production schedule is now 9:30 AM.
+    Production scheduling is now 9:30 AM.
     """
     run_930()
 
