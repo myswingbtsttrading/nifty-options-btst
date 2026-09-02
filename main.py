@@ -38,33 +38,12 @@ def _format_signal_message(result) -> str:
     nifty_signal = getattr(result, "nifty_signal", None)
     indicators = getattr(result, "indicators", None)
 
+    reason = getattr(nifty_signal, "reason", "Signal generated.")
+    ema20 = getattr(indicators, "ema20", 0.0)
+    ema50 = getattr(indicators, "ema50", 0.0)
+    rsi = getattr(indicators, "rsi", 0.0)
+
     if signal.decision != "BUY":
-        reason = getattr(
-            nifty_signal,
-            "reason",
-            "No qualifying BTST setup.",
-        )
-
-        ema20 = getattr(indicators, "ema20", None)
-        ema50 = getattr(indicators, "ema50", None)
-        rsi = getattr(indicators, "rsi", None)
-
-        ema20_text = (
-            f"{ema20:.2f}"
-            if ema20 is not None
-            else "N/A"
-        )
-        ema50_text = (
-            f"{ema50:.2f}"
-            if ema50 is not None
-            else "N/A"
-        )
-        rsi_text = (
-            f"{rsi:.1f}"
-            if rsi is not None
-            else "N/A"
-        )
-
         return (
             "NIFTY BTST ALERT\n"
             "━━━━━━━━━━━━━━━━━━\n"
@@ -73,31 +52,11 @@ def _format_signal_message(result) -> str:
             f"Decision: {signal.decision}\n"
             f"Confidence: {signal.confidence:.1f}%\n"
             f"Reason: {reason}\n"
-            f"EMA20: {ema20_text}\n"
-            f"EMA50: {ema50_text}\n"
-            f"RSI: {rsi_text}\n"
+            f"EMA20: {ema20:.2f}\n"
+            f"EMA50: {ema50:.2f}\n"
+            f"RSI: {rsi:.1f}\n"
             "\nNo BTST position recommended."
         )
-
-    ema20 = getattr(indicators, "ema20", None)
-    ema50 = getattr(indicators, "ema50", None)
-    rsi = getattr(indicators, "rsi", None)
-
-    ema20_text = (
-        f"{ema20:.2f}"
-        if ema20 is not None
-        else "N/A"
-    )
-    ema50_text = (
-        f"{ema50:.2f}"
-        if ema50 is not None
-        else "N/A"
-    )
-    rsi_text = (
-        f"{rsi:.1f}"
-        if rsi is not None
-        else "N/A"
-    )
 
     return (
         "🚀 NIFTY BTST BUY ALERT\n"
@@ -111,28 +70,21 @@ def _format_signal_message(result) -> str:
         f"Target: ₹{signal.target:,.2f}\n\n"
         f"Lots: {signal.lots}\n"
         f"Quantity: {signal.quantity}\n"
-        f"Capital Required: "
-        f"₹{signal.capital_required:,.2f}\n"
-        f"Planned Risk: "
-        f"₹{signal.planned_risk:,.2f}\n"
-        f"Risk/Reward: "
-        f"{signal.risk_reward_ratio:.2f}\n"
-        f"Confidence: "
-        f"{signal.confidence:.1f}%\n\n"
+        f"Capital Required: ₹{signal.capital_required:,.2f}\n"
+        f"Planned Risk: ₹{signal.planned_risk:,.2f}\n"
+        f"Risk/Reward: {signal.risk_reward_ratio:.2f}\n"
+        f"Confidence: {signal.confidence:.1f}%\n\n"
         f"NIFTY: ₹{signal.nifty_price:,.2f}\n"
-        f"EMA20: {ema20_text}\n"
-        f"EMA50: {ema50_text}\n"
-        f"RSI: {rsi_text}\n\n"
+        f"EMA20: {ema20:.2f}\n"
+        f"EMA50: {ema50:.2f}\n"
+        f"RSI: {rsi:.1f}\n\n"
         "📌 BTST: Buy near 3 PM.\n"
         "📌 Exit/review next trading morning at 9:30 AM."
     )
 
 
-def _atomic_write_json(
-    path: Path,
-    payload: dict,
-) -> None:
-    path.parent.mkdir(
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    DATA_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
@@ -141,21 +93,18 @@ def _atomic_write_json(
         f".{path.name}.tmp"
     )
 
-    try:
-        temporary.write_text(
-            json.dumps(
-                payload,
-                separators=(",", ":"),
-            ),
-            encoding="utf-8",
-        )
-        os.replace(
-            temporary,
-            path,
-        )
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    temporary.write_text(
+        json.dumps(
+            payload,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+
+    os.replace(
+        temporary,
+        path,
+    )
 
 
 def _save_signal_state(signal) -> None:
@@ -182,7 +131,7 @@ def _save_signal_state(signal) -> None:
 
     if not isinstance(payload, dict):
         raise LiveMarketDataError(
-            "BTST signal returned invalid state payload."
+            "BTST signal state must be a JSON object."
         )
 
     _atomic_write_json(
@@ -201,7 +150,7 @@ def _load_signal_state() -> dict:
     try:
         payload = json.loads(
             STATE_FILE.read_text(
-                encoding="utf-8",
+                encoding="utf-8"
             )
         )
     except (
@@ -240,26 +189,16 @@ def _load_signal_state() -> dict:
             + ", ".join(missing)
         )
 
-    if str(
-        payload["decision"]
-    ).upper() != "BUY":
+    if str(payload["decision"]).upper() != "BUY":
         raise LiveMarketDataError(
             "Stored BTST position is not an active BUY."
         )
 
     try:
-        entry_price = float(
-            payload["entry_price"]
-        )
-        quantity = int(
-            payload["quantity"]
-        )
-        lots = int(
-            payload["lots"]
-        )
-        strike = float(
-            payload["strike"]
-        )
+        entry_price = float(payload["entry_price"])
+        quantity = int(payload["quantity"])
+        lots = int(payload["lots"])
+        strike = float(payload["strike"])
     except (
         TypeError,
         ValueError,
@@ -292,10 +231,7 @@ def _load_signal_state() -> dict:
         payload["option_type"]
     ).upper()
 
-    if option_type not in {
-        "CE",
-        "PE",
-    }:
+    if option_type not in {"CE", "PE"}:
         raise LiveMarketDataError(
             "Stored BTST option_type must be CE or PE."
         )
@@ -310,6 +246,11 @@ def _load_signal_state() -> dict:
         ) from exc
 
     return payload
+
+
+def _remove_active_state() -> None:
+    if STATE_FILE.exists():
+        STATE_FILE.unlink()
 
 
 def _calculate_pnl(
@@ -395,12 +336,8 @@ def _save_exit_record(
     position: dict,
     exit_price: float,
     exit_timestamp,
+    telegram_sent: bool = False,
 ) -> None:
-    DATA_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
     entry_price = float(
         position["entry_price"]
     )
@@ -417,6 +354,7 @@ def _save_exit_record(
 
     payload = {
         "status": "CLOSED",
+        "telegram_sent": bool(telegram_sent),
         "closed_at": datetime.now(
             timezone.utc
         ).isoformat(),
@@ -448,14 +386,14 @@ def _save_exit_record(
     )
 
 
-def _load_existing_exit_record():
+def _load_existing_exit_record() -> dict | None:
     if not EXIT_FILE.exists():
         return None
 
     try:
         payload = json.loads(
             EXIT_FILE.read_text(
-                encoding="utf-8",
+                encoding="utf-8"
             )
         )
     except (
@@ -476,82 +414,82 @@ def _load_existing_exit_record():
 
 
 def _exit_record_matches_position(
-    position: dict,
     exit_record: dict,
+    position: dict,
 ) -> bool:
-    if not isinstance(exit_record, dict):
-        return False
-
-    # Only a completed CLOSED record can make the
-    # exit process idempotent.
     if str(
         exit_record.get("status", "")
     ).upper() != "CLOSED":
         return False
 
-    try:
-        if str(
-            exit_record.get("direction", "")
-        ).upper() != str(
-            position["direction"]
-        ).upper():
+    comparisons = (
+        "direction",
+        "option_type",
+        "expiry",
+        "strike",
+        "entry_price",
+        "quantity",
+        "lots",
+    )
+
+    for field in comparisons:
+        if field not in exit_record:
             return False
 
-        if str(
-            exit_record.get("option_type", "")
-        ).upper() != str(
-            position["option_type"]
-        ).upper():
+        if field not in position:
             return False
 
-        if str(
-            exit_record.get("expiry", "")
-        ) != str(
-            position["expiry"]
-        ):
-            return False
+        if field in {
+            "strike",
+            "entry_price",
+        }:
+            try:
+                if float(exit_record[field]) != float(
+                    position[field]
+                ):
+                    return False
+            except (
+                TypeError,
+                ValueError,
+            ):
+                return False
 
-        if float(
-            exit_record.get("strike")
-        ) != float(
-            position["strike"]
-        ):
-            return False
+        elif field in {
+            "quantity",
+            "lots",
+        }:
+            try:
+                if int(exit_record[field]) != int(
+                    position[field]
+                ):
+                    return False
+            except (
+                TypeError,
+                ValueError,
+            ):
+                return False
 
-        if float(
-            exit_record.get("entry_price")
-        ) != float(
-            position["entry_price"]
-        ):
-            return False
-
-        if int(
-            exit_record.get("quantity")
-        ) != int(
-            position["quantity"]
-        ):
-            return False
-
-        if int(
-            exit_record.get("lots")
-        ) != int(
-            position["lots"]
-        ):
-            return False
-
-    except (
-        KeyError,
-        TypeError,
-        ValueError,
-    ):
-        return False
+        else:
+            if str(
+                exit_record[field]
+            ).upper() != str(
+                position[field]
+            ).upper():
+                return False
 
     return True
 
 
-def _remove_active_state() -> None:
-    if STATE_FILE.exists():
-        STATE_FILE.unlink()
+def _mark_exit_telegram_sent(
+    exit_record: dict,
+) -> None:
+    payload = dict(exit_record)
+    payload["telegram_sent"] = True
+
+    _atomic_write_json(
+        EXIT_FILE,
+        payload,
+    )
 
 
 def run_3pm() -> None:
@@ -564,14 +502,6 @@ def run_3pm() -> None:
         today=date.today(),
     )
 
-    if (
-        result.signal.decision == "BUY"
-        and STATE_FILE.exists()
-    ):
-        raise LiveMarketDataError(
-            "An active BTST BUY position already exists."
-        )
-
     message = _format_signal_message(
         result
     )
@@ -580,6 +510,16 @@ def run_3pm() -> None:
 
     if result.signal.decision != "BUY":
         return
+
+    existing_state = None
+
+    if STATE_FILE.exists():
+        existing_state = _load_signal_state()
+
+    if existing_state is not None:
+        raise LiveMarketDataError(
+            "An active BTST BUY position already exists."
+        )
 
     _save_signal_state(
         result.signal
@@ -600,14 +540,16 @@ def run_930() -> None:
     if (
         existing_exit is not None
         and _exit_record_matches_position(
-            position,
             existing_exit,
+            position,
+        )
+        and bool(
+            existing_exit.get(
+                "telegram_sent",
+                False,
+            )
         )
     ):
-        print(
-            "Matching CLOSED BTST exit record already exists. "
-            "Removing stale active state without sending a duplicate alert."
-        )
         _remove_active_state()
         return
 
@@ -660,20 +602,28 @@ def run_930() -> None:
         exit_timestamp=option_quote.timestamp,
     )
 
-    # Persist the completed transaction before Telegram.
-    # This guarantees the audit record survives an alert failure.
     _save_exit_record(
         position=position,
         exit_price=exit_price,
         exit_timestamp=option_quote.timestamp,
+        telegram_sent=False,
     )
 
     try:
         send_alert(message)
     except Exception:
-        # Keep both records so the completed transaction remains
-        # auditable and the active state is not silently lost.
         raise
+
+    exit_record = _load_existing_exit_record()
+
+    if exit_record is None:
+        raise LiveMarketDataError(
+            "Completed BTST exit record could not be reloaded."
+        )
+
+    _mark_exit_telegram_sent(
+        exit_record
+    )
 
     print(message)
 
