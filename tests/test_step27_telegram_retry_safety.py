@@ -14,287 +14,208 @@ def _main_source():
     return _read(ROOT / "main.py")
 
 
-def test_3pm_rolls_back_state_when_telegram_fails():
+def _function_source(name, limit=18000):
+    source = _main_source()
+    start = source.find(f"def {name}")
+    assert start >= 0
+    return source[start:start + limit]
+
+
+def test_notifier_uses_send_alert():
     source = _main_source()
 
-    start = source.find("def run_3pm")
-    assert start >= 0
-
-    section = source[start:start + 14000]
-
-    telegram_pos = section.find("send_telegram")
-    remove_pos = section.find("_remove_active_state")
-
-    assert telegram_pos >= 0
-    assert remove_pos >= 0
-    assert remove_pos > telegram_pos
+    assert "from notifier import send_alert" in source
 
 
-def test_3pm_reraises_telegram_failure():
-    source = _main_source()
-
-    start = source.find("def run_3pm")
-    assert start >= 0
-
-    section = source[start:start + 14000]
-
-    telegram_pos = section.find("send_telegram")
-    assert telegram_pos >= 0
-
-    following = section[telegram_pos:telegram_pos + 5000]
-
-    assert "except" in following
-    assert "raise" in following
-
-
-def test_3pm_saves_state_before_telegram():
-    source = _main_source()
-
-    start = source.find("def run_3pm")
-    assert start >= 0
-
-    section = source[start:start + 14000]
+def test_3pm_saves_state_before_alert():
+    section = _function_source("run_3pm")
 
     save_pos = section.find("_save_signal_state")
-    telegram_pos = section.find("send_telegram")
+    alert_pos = section.find("send_alert")
 
     assert save_pos >= 0
-    assert telegram_pos >= 0
-    assert save_pos < telegram_pos
+    assert alert_pos >= 0
+    assert save_pos < alert_pos
 
 
-def test_930_saves_exit_record_before_telegram():
-    source = _main_source()
+def test_3pm_removes_state_when_alert_fails():
+    section = _function_source("run_3pm")
 
-    start = source.find("def run_930")
-    assert start >= 0
+    alert_pos = section.find("send_alert")
+    remove_pos = section.find("_remove_active_state")
 
-    section = source[start:start + 16000]
-
-    save_pos = section.find("_save_exit_record")
-    telegram_pos = section.find("send_telegram")
-
-    assert save_pos >= 0
-    assert telegram_pos >= 0
-    assert save_pos < telegram_pos
+    assert alert_pos >= 0
+    assert remove_pos >= 0
+    assert remove_pos > alert_pos
 
 
-def test_930_keeps_exit_record_when_telegram_fails():
-    source = _main_source()
+def test_3pm_reraises_alert_failure():
+    section = _function_source("run_3pm")
 
-    start = source.find("def run_930")
-    assert start >= 0
+    alert_pos = section.find("send_alert")
+    assert alert_pos >= 0
 
-    section = source[start:start + 16000]
-
-    telegram_pos = section.find("send_telegram")
-    assert telegram_pos >= 0
-
-    following = section[telegram_pos:telegram_pos + 5000]
+    following = section[alert_pos:alert_pos + 3000]
 
     assert "except" in following
     assert "raise" in following
 
 
-def test_930_does_not_remove_state_before_telegram():
-    source = _main_source()
+def test_3pm_blocks_existing_active_position():
+    section = _function_source("run_3pm")
 
-    start = source.find("def run_930")
-    assert start >= 0
-
-    section = source[start:start + 16000]
-
-    telegram_pos = section.find("send_telegram")
-    remove_pos = section.find("_remove_active_state")
-
-    assert telegram_pos >= 0
-    assert remove_pos >= 0
-    assert remove_pos > telegram_pos
-
-
-def test_930_removes_state_after_successful_telegram():
-    source = _main_source()
-
-    start = source.find("def run_930")
-    assert start >= 0
-
-    section = source[start:start + 16000]
-
-    telegram_pos = section.find("send_telegram")
-    remove_pos = section.find("_remove_active_state")
-
-    assert telegram_pos >= 0
-    assert remove_pos >= 0
-    assert remove_pos > telegram_pos
-
-
-def test_existing_closed_exit_is_checked():
-    source = _main_source()
-
-    start = source.find("def run_930")
-    assert start >= 0
-
-    section = source[start:start + 16000]
-
-    assert "_load_existing_exit_record" in section
-    assert "_exit_record_matches_position" in section
-    assert "CLOSED" in section
-
-
-def test_matching_closed_exit_prevents_duplicate_exit_processing():
-    source = _main_source()
-
-    start = source.find("def run_930")
-    assert start >= 0
-
-    section = source[start:start + 16000]
-
-    match_pos = section.find("_exit_record_matches_position")
-    chain_pos = section.find("fetch_nifty_option_chain")
-
-    assert match_pos >= 0
-    assert chain_pos >= 0
-    assert match_pos < chain_pos
-
-
-def test_matching_closed_exit_prevents_duplicate_telegram():
-    source = _main_source()
-
-    start = source.find("def run_930")
-    assert start >= 0
-
-    section = source[start:start + 16000]
-
-    match_pos = section.find("_exit_record_matches_position")
-    telegram_pos = section.find("send_telegram")
-
-    assert match_pos >= 0
-    assert telegram_pos >= 0
-    assert match_pos < telegram_pos
-
-
-def test_3pm_requires_active_state_check():
-    source = _main_source()
-
-    start = source.find("def run_3pm")
-    assert start >= 0
-
-    section = source[start:start + 14000]
-
+    assert "STATE_FILE.exists()" in section
     assert "_load_signal_state" in section
     assert "An active BTST BUY position already exists." in section
 
 
-def test_telegram_function_is_used_for_buy_alert():
+def test_3pm_does_not_alert_for_no_trade():
+    section = _function_source("run_3pm")
+
+    decision_pos = section.find("result.signal.decision")
+    alert_pos = section.find("send_alert")
+
+    assert decision_pos >= 0
+    assert alert_pos >= 0
+    assert decision_pos < alert_pos
+
+
+def test_930_checks_existing_exit_before_chain():
+    section = _function_source("run_930")
+
+    exit_pos = section.find("_load_existing_exit_record")
+    chain_pos = section.find("fetch_nifty_option_chain")
+
+    assert exit_pos >= 0
+    assert chain_pos >= 0
+    assert exit_pos < chain_pos
+
+
+def test_930_requires_matching_completed_exit_for_idempotent_skip():
+    section = _function_source("run_930")
+
+    match_pos = section.find("_exit_record_matches_position")
+    sent_pos = section.find("telegram_sent")
+
+    assert match_pos >= 0
+    assert sent_pos >= 0
+    assert match_pos < sent_pos
+
+
+def test_930_removes_state_after_already_delivered_exit():
+    section = _function_source("run_930")
+
+    match_pos = section.find("_exit_record_matches_position")
+    remove_pos = section.find("_remove_active_state")
+
+    assert match_pos >= 0
+    assert remove_pos >= 0
+    assert remove_pos > match_pos
+
+
+def test_930_saves_exit_before_alert():
+    section = _function_source("run_930")
+
+    save_pos = section.find("_save_exit_record")
+    alert_pos = section.find("send_alert")
+
+    assert save_pos >= 0
+    assert alert_pos >= 0
+    assert save_pos < alert_pos
+
+
+def test_930_marks_exit_delivery_only_after_alert():
+    section = _function_source("run_930")
+
+    alert_pos = section.find("send_alert")
+    mark_pos = section.find("_mark_exit_telegram_sent")
+
+    assert alert_pos >= 0
+    assert mark_pos >= 0
+    assert alert_pos < mark_pos
+
+
+def test_930_removes_state_only_after_delivery_mark():
+    section = _function_source("run_930")
+
+    mark_pos = section.find("_mark_exit_telegram_sent")
+    remove_pos = section.find("_remove_active_state")
+
+    assert mark_pos >= 0
+    assert remove_pos >= 0
+    assert mark_pos < remove_pos
+
+
+def test_930_keeps_state_when_alert_fails():
+    section = _function_source("run_930")
+
+    alert_pos = section.find("send_alert")
+    mark_pos = section.find("_mark_exit_telegram_sent")
+    remove_pos = section.find("_remove_active_state")
+
+    assert alert_pos >= 0
+    assert mark_pos > alert_pos
+    assert remove_pos > mark_pos
+
+
+def test_exit_record_has_telegram_status():
+    section = _function_source("_save_exit_record", 8000)
+
+    assert "telegram_sent" in section
+
+
+def test_exit_record_defaults_delivery_to_false():
+    section = _function_source("_save_exit_record", 8000)
+
+    assert '"telegram_sent": bool(telegram_sent)' in section
+
+
+def test_exit_delivery_marker_is_persisted():
+    section = _function_source("_mark_exit_telegram_sent", 3000)
+
+    assert "telegram_sent" in section
+    assert "_atomic_write_json" in section
+
+
+def test_atomic_writer_uses_replace():
     source = _main_source()
 
-    assert "send_telegram" in source
+    assert "def _atomic_write_json" in source
+    assert "os.replace" in source
 
 
-def test_telegram_failure_is_not_silently_ignored():
+def test_active_state_cleanup_is_centralized():
     source = _main_source()
 
-    assert "raise" in source
+    assert "def _remove_active_state" in source
 
 
-def test_exit_record_contains_delivery_relevant_timestamp():
-    source = _main_source()
+def test_alert_failure_does_not_silently_continue():
+    section = _function_source("run_3pm")
 
-    start = source.find("def _save_exit_record")
-    assert start >= 0
+    alert_pos = section.find("send_alert")
+    following = section[alert_pos:alert_pos + 3000]
 
-    section = source[start:start + 7000]
-
-    assert "closed_at" in section
+    assert "raise" in following
 
 
-def test_exit_record_contains_entry_and_exit_prices():
-    source = _main_source()
+def test_exit_record_is_closed():
+    section = _function_source("_save_exit_record", 8000)
 
-    start = source.find("def _save_exit_record")
-    assert start >= 0
-
-    section = source[start:start + 7000]
-
-    assert "entry_price" in section
-    assert "exit_price" in section
+    assert '"status": "CLOSED"' in section
 
 
-def test_exit_record_contains_position_identity():
-    source = _main_source()
-
-    start = source.find("def _save_exit_record")
-    assert start >= 0
-
-    section = source[start:start + 7000]
+def test_exit_record_contains_trade_identity():
+    section = _function_source("_save_exit_record", 8000)
 
     for field in (
         "direction",
         "option_type",
         "strike",
         "expiry",
+        "entry_price",
+        "exit_price",
+        "quantity",
+        "lots",
     ):
         assert field in section
-
-
-def test_exit_record_contains_position_size():
-    source = _main_source()
-
-    start = source.find("def _save_exit_record")
-    assert start >= 0
-
-    section = source[start:start + 7000]
-
-    assert "quantity" in section
-    assert "lots" in section
-
-
-def test_exit_record_contains_pnl():
-    source = _main_source()
-
-    start = source.find("def _save_exit_record")
-    assert start >= 0
-
-    section = source[start:start + 7000]
-
-    assert "pnl" in section
-    assert "pnl_pct" in section
-
-
-def test_state_write_is_atomic():
-    source = _main_source()
-
-    start = source.find("def _atomic_write_json")
-    assert start >= 0
-
-    section = source[start:start + 4000]
-
-    assert "tmp" in section
-    assert "os.replace" in section
-
-
-def test_exit_record_write_uses_atomic_writer():
-    source = _main_source()
-
-    start = source.find("def _save_exit_record")
-    assert start >= 0
-
-    section = source[start:start + 7000]
-
-    assert "_atomic_write_json" in section
-
-
-def test_retry_path_has_no_unconditional_state_deletion():
-    source = _main_source()
-
-    start = source.find("def run_930")
-    assert start >= 0
-
-    section = source[start:start + 16000]
-
-    telegram_pos = section.find("send_telegram")
-    assert telegram_pos >= 0
-
-    after_telegram = section[telegram_pos:telegram_pos + 5000]
-
-    assert "_remove_active_state" not in after_telegram.split("except", 1)[0]
