@@ -42,6 +42,7 @@ jobs:
       - name: Verify BTST state output
         run: |
           STATE_FILE="data/live_btst_signal.json"
+          EXIT_FILE="data/last_btst_exit.json"
 
           if [ -f "$STATE_FILE" ]; then
             echo "Active BTST position state exists:"
@@ -49,6 +50,68 @@ jobs:
           else
             echo "No active BTST position state."
           fi
+
+          if [ -f "$EXIT_FILE" ]; then
+            echo "Latest BTST exit record:"
+            cat "$EXIT_FILE"
+          fi
+
+      - name: Validate active BTST state
+        run: |
+          STATE_FILE="data/live_btst_signal.json"
+
+          if [ ! -f "$STATE_FILE" ]; then
+            echo "No active BUY position. Nothing to validate."
+            exit 0
+          fi
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("data/live_btst_signal.json")
+          payload = json.loads(path.read_text(encoding="utf-8"))
+
+          required = {
+              "timestamp",
+              "decision",
+              "direction",
+              "expiry",
+              "strike",
+              "option_type",
+              "entry_price",
+              "quantity",
+              "lots",
+          }
+
+          missing = sorted(required - payload.keys())
+
+          if missing:
+              raise SystemExit(
+                  f"Invalid BTST state. Missing fields: {missing}"
+              )
+
+          if payload["decision"] != "BUY":
+              raise SystemExit(
+                  f"Invalid BTST state decision: {payload['decision']}"
+              )
+
+          if payload["option_type"] not in {"CE", "PE"}:
+              raise SystemExit(
+                  f"Invalid option type: {payload['option_type']}"
+              )
+
+          if float(payload["entry_price"]) <= 0:
+              raise SystemExit("Invalid entry price")
+
+          if int(payload["quantity"]) <= 0:
+              raise SystemExit("Invalid quantity")
+
+          if int(payload["lots"]) <= 0:
+              raise SystemExit("Invalid lots")
+
+          print("BTST state validation passed.")
+          PY
 
       - name: Persist BTST position state
         run: |
