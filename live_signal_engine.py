@@ -1,3 +1,4 @@
+```python
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -324,8 +325,10 @@ def build_live_signal(
         selection_mode="ATM",
     )
 
+    # Use the original positional payload argument for compatibility
+    # with all supported find_option_quote() signatures.
     option_quote = find_option_quote(
-        option_chain_payload=option_chain,
+        option_chain,
         expiry=expiry,
         strike=contract.strike,
         option_type=contract.option_type,
@@ -351,3 +354,4 @@ def build_live_signal(
         nifty_signal=nifty_signal,
         indicators=indicators,
     )
+```
