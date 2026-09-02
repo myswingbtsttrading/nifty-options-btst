@@ -683,12 +683,24 @@ def fetch_nifty_quote(
 
 
 def _normalise_chain_records(
-    payload: dict[str, Any],
+    payload: dict[str, Any] | NiftyOptionChain,
 ) -> tuple[
     float,
     tuple[date, ...],
     tuple[dict[str, Any], ...],
 ]:
+    if isinstance(payload, NiftyOptionChain):
+        if not payload.records:
+            raise LiveMarketDataError(
+                "NSE returned no NIFTY option-chain records."
+            )
+
+        return (
+            float(payload.underlying_value),
+            tuple(payload.expiry_dates),
+            tuple(payload.records),
+        )
+
     if not isinstance(
         payload,
         dict,
@@ -1156,11 +1168,11 @@ def nearest_nifty_expiry(
 
 
 def build_option_chain_snapshot(
-    payload: dict[str, Any] | None = None,
+    payload: dict[str, Any] | NiftyOptionChain | None = None,
     nifty_price: float = 0.0,
     expiry: date | None = None,
     strikes_each_side: int = 2,
-    option_chain_payload: dict[str, Any] | None = None,
+    option_chain_payload: dict[str, Any] | NiftyOptionChain | None = None,
 ) -> OptionChainSnapshot:
     """
     Build aggregated option-chain statistics.
@@ -1314,7 +1326,7 @@ def build_option_chain_snapshot(
 
 
 def find_option_quote(
-    payload: dict[str, Any],
+    payload: dict[str, Any] | NiftyOptionChain,
     expiry: date,
     strike: float,
     option_type: str,
