@@ -142,4 +142,77 @@ def test_main_has_state_and_exit_files():
 
 
 def test_main_has_atomic_state_persistence():
-   
+    main_source = _read(
+        ROOT / "main.py"
+    )
+
+    assert "def _atomic_write_json" in main_source
+    assert "os.replace(" in main_source
+    assert ".tmp" in main_source
+
+
+def test_main_validates_stored_position():
+    main_source = _read(
+        ROOT / "main.py"
+    )
+
+    assert "def _load_signal_state" in main_source
+    assert '"decision"' in main_source
+    assert '"direction"' in main_source
+    assert '"expiry"' in main_source
+    assert '"strike"' in main_source
+    assert '"option_type"' in main_source
+    assert '"entry_price"' in main_source
+    assert '"quantity"' in main_source
+    assert '"lots"' in main_source
+
+
+def test_main_requires_closed_exit_for_idempotency():
+    main_source = _read(
+        ROOT / "main.py"
+    )
+
+    assert "def _exit_record_matches_position" in main_source
+    assert 'get("status", "")' in main_source
+    assert '"CLOSED"' in main_source
+
+
+def test_main_uses_exact_contract_for_exit():
+    main_source = _read(
+        ROOT / "main.py"
+    )
+
+    assert "find_option_quote(" in main_source
+    assert "expiry=expiry" in main_source
+    assert "strike=strike" in main_source
+    assert "option_type=option_type" in main_source
+
+
+def test_main_persists_exit_before_telegram():
+    main_source = _read(
+        ROOT / "main.py"
+    )
+
+    save_position = main_source.index(
+        "_save_exit_record("
+    )
+    telegram = main_source.index(
+        "send_alert(message)"
+    )
+
+    assert save_position < telegram
+
+
+def test_main_removes_state_after_successful_telegram():
+    main_source = _read(
+        ROOT / "main.py"
+    )
+
+    telegram = main_source.index(
+        "send_alert(message)"
+    )
+    remove_state = main_source.index(
+        "_remove_active_state()"
+    )
+
+    assert telegram < remove_state
