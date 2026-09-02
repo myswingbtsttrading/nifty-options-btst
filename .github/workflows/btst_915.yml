@@ -29,7 +29,8 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run test suite
-        run: python -m pytest -q
+        run: |
+          python -m pytest -q
 
       - name: Generate 9:30 AM SELL alert
         env:
@@ -38,18 +39,47 @@ jobs:
         run: |
           python main.py --mode 930
 
+      - name: Verify closed BTST state
+        run: |
+          STATE_FILE="data/live_btst_signal.json"
+          EXIT_FILE="data/last_btst_exit.json"
+
+          if [ -f "$STATE_FILE" ]; then
+            echo "Active BTST position state remains:"
+            cat "$STATE_FILE"
+          else
+            echo "Active BTST position state removed."
+          fi
+
+          if [ -f "$EXIT_FILE" ]; then
+            echo "Latest BTST exit record:"
+            cat "$EXIT_FILE"
+          else
+            echo "No BTST exit record created."
+          fi
+
       - name: Remove closed BTST position state
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if [ -f data/live_btst_signal.json ]; then
-            git add -u data/live_btst_signal.json
+          STATE_FILE="data/live_btst_signal.json"
+          EXIT_FILE="data/last_btst_exit.json"
+
+          if [ -f "$STATE_FILE" ]; then
+            echo "Active state still exists; not removing it."
+          elif git ls-files --error-unmatch "$STATE_FILE" >/dev/null 2>&1; then
+            echo "Staging removal of closed BTST state."
+            git add -u -- "$STATE_FILE"
+          fi
+
+          if [ -f "$EXIT_FILE" ]; then
+            git add -- "$EXIT_FILE"
           fi
 
           if git diff --cached --quiet; then
-            echo "No position state to remove."
+            echo "No BTST exit state changes to commit."
           else
-            git commit -m "Close BTST position state"
+            git commit -m "Persist BTST exit state"
             git push
           fi
