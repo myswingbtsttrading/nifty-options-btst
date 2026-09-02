@@ -276,6 +276,17 @@ def _iter_rows(
 
         return []
 
+    # Normalized live-chain object returned by nse_live_data.py.
+    # NiftyOptionChain stores already-normalized option rows in `records`.
+    if hasattr(option_chain, "records"):
+        value = option_chain.records
+
+        if isinstance(value, Iterable) and not isinstance(
+            value,
+            (str, bytes, Mapping),
+        ):
+            return value
+
     if hasattr(option_chain, "data"):
         value = option_chain.data
 
