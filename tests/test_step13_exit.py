@@ -1,5 +1,9 @@
+```python
 import json
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
+
+import pytest
 
 import main
 
@@ -28,13 +32,18 @@ def _position():
     }
 
 
-def test_save_and_load_signal_state(
+def _configure_state(
     monkeypatch,
     tmp_path,
 ):
     state_file = (
         tmp_path
         / "live_btst_signal.json"
+    )
+
+    exit_file = (
+        tmp_path
+        / "last_btst_exit.json"
     )
 
     monkeypatch.setattr(
@@ -47,6 +56,24 @@ def test_save_and_load_signal_state(
         main,
         "STATE_FILE",
         state_file,
+    )
+
+    monkeypatch.setattr(
+        main,
+        "EXIT_FILE",
+        exit_file,
+    )
+
+    return state_file, exit_file
+
+
+def test_save_and_load_signal_state(
+    monkeypatch,
+    tmp_path,
+):
+    state_file, _ = _configure_state(
+        monkeypatch,
+        tmp_path,
     )
 
     class Signal:
@@ -86,7 +113,6 @@ def test_sell_message_calculates_profit():
     assert "Exit Premium: ₹120.00" in message
     assert "P/L: ₹1,300.00" in message
     assert "P/L %: +20.00%" in message
-    assert "9:30 AM" in message
 
 
 def test_sell_message_calculates_loss():
@@ -105,16 +131,15 @@ def test_sell_message_calculates_loss():
     assert "LOSS" in message
     assert "P/L: ₹-650.00" in message
     assert "P/L %: -10.00%" in message
-    assert "9:30 AM" in message
 
 
-def test_run_930_fetches_actual_option_premium_and_sends_alert(
+def test_run_930_fetches_exact_live_option_and_closes_state(
     monkeypatch,
     tmp_path,
 ):
-    state_file = (
-        tmp_path
-        / "live_btst_signal.json"
+    state_file, exit_file = _configure_state(
+        monkeypatch,
+        tmp_path,
     )
 
     state_file.write_text(
@@ -122,12 +147,6 @@ def test_run_930_fetches_actual_option_premium_and_sends_alert(
             _position()
         ),
         encoding="utf-8",
-    )
-
-    monkeypatch.setattr(
-        main,
-        "STATE_FILE",
-        state_file,
     )
 
     class FakeOptionQuote:
@@ -140,15 +159,103 @@ def test_run_930_fetches_actual_option_premium_and_sends_alert(
             30,
         )
 
-    class FakeChain:
-        pass
+    calls = []
+
+    monkeypatch.setattr(
+        main,
+        "fetch_nifty_option_chain",
+        lambda: {"fake": "chain"},
+    )
+
+    def fake_find_option_quote(
+        **kwargs,
+    ):
+        calls.append(kwargs)
+        return FakeOptionQuote()
+
+    monkeypatch.setattr(
+        main,
+        "find_option_quote",
+        fake_find_option_quote,
+    )
+
+    monkeypatch.setattr(
+        main,
+        "send_alert",
+        lambda message: calls.append(
+            {
+                "message": message
+            }
+        ),
+    )
+
+    main.run_930()
+
+    quote_call = calls[0]
+
+    assert quote_call["expiry"] == date(
+        2026,
+        9,
+        3,
+    )
+
+    assert quote_call["strike"] == 25000.0
+    assert quote_call["option_type"] == "CE"
+
+    alert = calls[1]["message"]
+
+    assert "NIFTY BTST SELL ALERT" in alert
+    assert "Exit Premium: ₹120.00" in alert
+    assert "P/L: ₹1,300.00" in alert
+
+    assert not state_file.exists()
+
+    assert exit_file.exists()
+
+    exit_payload = json.loads(
+        exit_file.read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert exit_payload["status"] == "CLOSED"
+    assert exit_payload["exit_price"] == 120.0
+    assert exit_payload["pnl"] == 1300.0
+    assert exit_payload["pnl_pct"] == 20.0
+
+
+def test_run_915_remains_backward_compatible(
+    monkeypatch,
+    tmp_path,
+):
+    state_file, exit_file = _configure_state(
+        monkeypatch,
+        tmp_path,
+    )
+
+    state_file.write_text(
+        json.dumps(
+            _position()
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeOptionQuote:
+        price = 120.0
+        timestamp = datetime(
+            2026,
+            8,
+            28,
+            9,
+            30,
+        )
 
     calls = []
 
     monkeypatch.setattr(
         main,
         "fetch_nifty_option_chain",
-        lambda: FakeChain(),
+        lambda: {"fake": "chain"},
     )
 
     monkeypatch.setattr(
@@ -163,55 +270,194 @@ def test_run_930_fetches_actual_option_premium_and_sends_alert(
         lambda message: calls.append(message),
     )
 
-    main.run_930()
+    main.run_915()
 
     assert len(calls) == 1
-    assert "NIFTY BTST SELL ALERT" in calls[0]
-    assert "Exit Premium: ₹120.00" in calls[0]
-    assert "P/L: ₹1,300.00" in calls[0]
-
+    assert "SELL ALERT" in calls[0]
     assert not state_file.exists()
+    assert exit_file.exists()
 
 
 def test_run_930_requires_position_state(
     monkeypatch,
     tmp_path,
 ):
-    state_file = (
-        tmp_path
-        / "missing.json"
+    state_file, _ = _configure_state(
+        monkeypatch,
+        tmp_path,
     )
 
-    monkeypatch.setattr(
-        main,
-        "STATE_FILE",
-        state_file,
-    )
-
-    try:
+    with pytest.raises(
+        Exception,
+        match="No BTST position state found",
+    ):
         main.run_930()
-    except Exception as exc:
-        assert (
-            "No BTST position state found"
-            in str(exc)
-        )
-    else:
-        raise AssertionError(
-            "Expected missing BTST position state to fail."
-        )
+
+    assert not state_file.exists()
 
 
-def test_run_915_remains_backward_compatible(
+def test_run_930_keeps_state_when_telegram_fails(
     monkeypatch,
+    tmp_path,
 ):
-    calls = []
+    state_file, exit_file = _configure_state(
+        monkeypatch,
+        tmp_path,
+    )
+
+    state_file.write_text(
+        json.dumps(
+            _position()
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeOptionQuote:
+        price = 120.0
+        timestamp = datetime(
+            2026,
+            8,
+            28,
+            9,
+            30,
+        )
 
     monkeypatch.setattr(
         main,
-        "run_930",
-        lambda: calls.append(True),
+        "fetch_nifty_option_chain",
+        lambda: {"fake": "chain"},
     )
 
-    main.run_915()
+    monkeypatch.setattr(
+        main,
+        "find_option_quote",
+        lambda **kwargs: FakeOptionQuote(),
+    )
 
-    assert calls == [True]
+    def fail_alert(message):
+        raise RuntimeError(
+            "Telegram unavailable"
+        )
+
+    monkeypatch.setattr(
+        main,
+        "send_alert",
+        fail_alert,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Telegram unavailable",
+    ):
+        main.run_930()
+
+    assert state_file.exists()
+    assert not exit_file.exists()
+
+
+def test_run_930_keeps_state_when_live_premium_is_invalid(
+    monkeypatch,
+    tmp_path,
+):
+    state_file, exit_file = _configure_state(
+        monkeypatch,
+        tmp_path,
+    )
+
+    state_file.write_text(
+        json.dumps(
+            _position()
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeOptionQuote:
+        price = 0.0
+        timestamp = datetime(
+            2026,
+            8,
+            28,
+            9,
+            30,
+        )
+
+    monkeypatch.setattr(
+        main,
+        "fetch_nifty_option_chain",
+        lambda: {"fake": "chain"},
+    )
+
+    monkeypatch.setattr(
+        main,
+        "find_option_quote",
+        lambda **kwargs: FakeOptionQuote(),
+    )
+
+    with pytest.raises(
+        Exception,
+        match="positive",
+    ):
+        main.run_930()
+
+    assert state_file.exists()
+    assert not exit_file.exists()
+
+
+def test_load_state_rejects_invalid_option_type(
+    monkeypatch,
+    tmp_path,
+):
+    state_file, _ = _configure_state(
+        monkeypatch,
+        tmp_path,
+    )
+
+    position = _position()
+    position["option_type"] = "XX"
+
+    state_file.write_text(
+        json.dumps(position),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        Exception,
+        match="option_type must be CE or PE",
+    ):
+        main._load_signal_state()
+
+
+def test_load_state_rejects_non_positive_entry(
+    monkeypatch,
+    tmp_path,
+):
+    state_file, _ = _configure_state(
+        monkeypatch,
+        tmp_path,
+    )
+
+    position = _position()
+    position["entry_price"] = 0
+
+    state_file.write_text(
+        json.dumps(position),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        Exception,
+        match="entry premium must be positive",
+    ):
+        main._load_signal_state()
+
+
+def test_main_supports_930_mode():
+    parser_source = Path(
+        "main.py"
+    ).read_text(
+        encoding="utf-8"
+    )
+
+    assert '"930"' in parser_source
+    assert 'args.mode in {' in parser_source
+```
