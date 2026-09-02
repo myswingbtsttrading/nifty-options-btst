@@ -17,7 +17,7 @@ def _function_source(path, name):
     tree = _parse(path)
     lines = _read(path).splitlines()
 
-    for node in tree.body:
+    for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
             return "\n".join(lines[node.lineno - 1 : node.end_lineno])
 
@@ -92,11 +92,26 @@ def test_930_checks_completed_exit_before_fetching_chain():
     source = _function_source("main.py", "run_930")
 
     idempotency_pos = source.find("_exit_record_matches_position")
-    chain_pos = source.find("build_option_chain_snapshot")
+
+    chain_markers = [
+        "fetch_option_chain",
+        "_build_option_chain",
+        "get_option_chain",
+        "option_chain",
+        "find_option_quote",
+    ]
+
+    chain_positions = [
+        source.find(marker)
+        for marker in chain_markers
+        if source.find(marker) >= 0
+    ]
 
     assert idempotency_pos >= 0
-    assert chain_pos >= 0
-    assert idempotency_pos < chain_pos
+    assert chain_positions
+
+    first_chain_pos = min(chain_positions)
+    assert idempotency_pos < first_chain_pos
 
 
 def test_930_saves_exit_before_alert():
@@ -123,7 +138,11 @@ def test_930_removes_state_only_after_successful_alert():
 def test_exit_record_matching_is_case_insensitive():
     source = _function_source("main.py", "_exit_record_matches_position")
 
-    assert ".upper()" in source or ".lower()" in source or ".casefold()" in source
+    assert (
+        ".upper()" in source
+        or ".lower()" in source
+        or ".casefold()" in source
+    )
 
 
 def test_atomic_json_write_is_used():
@@ -139,6 +158,7 @@ def test_workflows_have_write_permission():
         ".github/workflows/btst_915.yml",
     ):
         source = _read(path)
+
         assert "permissions:" in source
         assert "contents: write" in source
 
@@ -149,6 +169,7 @@ def test_workflows_have_concurrency_protection():
         ".github/workflows/btst_915.yml",
     ):
         source = _read(path)
+
         assert "concurrency:" in source
 
 
@@ -158,6 +179,7 @@ def test_workflows_have_timeout_protection():
         ".github/workflows/btst_915.yml",
     ):
         source = _read(path)
+
         assert "timeout-minutes:" in source
 
 
