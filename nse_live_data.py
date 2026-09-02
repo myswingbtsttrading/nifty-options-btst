@@ -219,6 +219,56 @@ def _parse_nse_datetime(
         return datetime.now()
 
 
+def _parse_expiry(
+    value: Any,
+) -> date | None:
+    if isinstance(
+        value,
+        datetime,
+    ):
+        return value.date()
+
+    if isinstance(
+        value,
+        date,
+    ):
+        return value
+
+    if value is None:
+        return None
+
+    text = str(value).strip()
+
+    if not text:
+        return None
+
+    formats = (
+        "%d-%b-%Y",
+        "%d-%B-%Y",
+        "%d-%m-%Y",
+        "%Y-%m-%d",
+    )
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(
+                text,
+                fmt,
+            ).date()
+        except ValueError:
+            continue
+
+    try:
+        return datetime.fromisoformat(
+            text.replace(
+                "Z",
+                "+00:00",
+            )
+        ).date()
+    except ValueError:
+        return None
+
+
 def nearest_nifty_expiry(
     chain: (
         NiftyOptionChain
