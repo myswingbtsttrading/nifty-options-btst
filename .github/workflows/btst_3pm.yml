@@ -41,9 +41,11 @@ jobs:
 
       - name: Verify BTST state output
         run: |
-          if [ -f "data/live_btst_signal.json" ]; then
+          STATE_FILE="data/live_btst_signal.json"
+
+          if [ -f "$STATE_FILE" ]; then
             echo "Active BTST position state exists:"
-            cat "data/live_btst_signal.json"
+            cat "$STATE_FILE"
           else
             echo "No active BTST position state."
           fi
