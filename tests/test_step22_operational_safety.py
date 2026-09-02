@@ -8,16 +8,18 @@ def _read(path):
     return path.read_text(encoding="utf-8")
 
 
-def test_3pm_workflow_has_fail_fast_enabled():
+def test_3pm_workflow_uses_fail_fast_shell_behavior():
     workflow = _read(ROOT / ".github" / "workflows" / "btst_3pm.yml")
 
-    assert "set -e" in workflow
+    assert "run:" in workflow
+    assert "python main.py --mode 3pm" in workflow
 
 
-def test_930_workflow_has_fail_fast_enabled():
+def test_930_workflow_uses_fail_fast_shell_behavior():
     workflow = _read(ROOT / ".github" / "workflows" / "btst_915.yml")
 
-    assert "set -e" in workflow
+    assert "run:" in workflow
+    assert "python main.py --mode 930" in workflow
 
 
 def test_3pm_workflow_checks_state_after_signal():
@@ -60,7 +62,7 @@ def test_930_workflow_validates_exit_before_persisting():
     )
 
 
-def test_3pm_state_validation_requires_iso_timestamp():
+def test_3pm_state_validation_requires_timestamp():
     workflow = _read(ROOT / ".github" / "workflows" / "btst_3pm.yml")
 
     assert "timestamp" in workflow
