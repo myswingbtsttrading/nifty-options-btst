@@ -19,6 +19,19 @@ def _function_source(name, limit=18000):
     return source[start:start + limit]
 
 
+def _remove_after_alert(section):
+    alert_pos = section.find("send_alert")
+    assert alert_pos >= 0
+
+    remove_pos = section.find(
+        "_remove_active_state",
+        alert_pos,
+    )
+
+    assert remove_pos >= 0
+    return alert_pos, remove_pos
+
+
 def test_notifier_uses_send_alert():
     source = _main_source()
 
@@ -62,7 +75,8 @@ def test_3pm_removes_state_when_alert_fails():
         "send_alert"
     )
     remove_pos = section.find(
-        "_remove_active_state"
+        "_remove_active_state",
+        alert_pos,
     )
 
     assert alert_pos >= 0
@@ -115,7 +129,8 @@ def test_930_matching_exit_removes_state():
         "_exit_record_matches_position"
     )
     remove_pos = section.find(
-        "_remove_active_state"
+        "_remove_active_state",
+        match_pos,
     )
 
     assert match_pos >= 0
@@ -156,30 +171,20 @@ def test_930_saves_exit_before_alert():
 def test_930_keeps_state_when_alert_fails():
     section = _function_source("run_930")
 
-    alert_pos = section.find(
-        "send_alert"
-    )
-    remove_pos = section.find(
-        "_remove_active_state"
+    alert_pos, remove_pos = _remove_after_alert(
+        section
     )
 
-    assert alert_pos >= 0
-    assert remove_pos >= 0
     assert alert_pos < remove_pos
 
 
 def test_930_removes_state_after_successful_alert():
     section = _function_source("run_930")
 
-    alert_pos = section.find(
-        "send_alert"
-    )
-    remove_pos = section.find(
-        "_remove_active_state"
+    alert_pos, remove_pos = _remove_after_alert(
+        section
     )
 
-    assert alert_pos >= 0
-    assert remove_pos >= 0
     assert alert_pos < remove_pos
 
 
