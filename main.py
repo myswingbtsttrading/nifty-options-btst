@@ -1,3 +1,4 @@
+```python
 from __future__ import annotations
 
 import argparse
@@ -54,11 +55,13 @@ def _format_signal_message(result) -> str:
             if ema20 is not None
             else "N/A"
         )
+
         ema50_text = (
             f"{ema50:.2f}"
             if ema50 is not None
             else "N/A"
         )
+
         rsi_text = (
             f"{rsi:.1f}"
             if rsi is not None
@@ -88,11 +91,13 @@ def _format_signal_message(result) -> str:
         if ema20 is not None
         else "N/A"
     )
+
     ema50_text = (
         f"{ema50:.2f}"
         if ema50 is not None
         else "N/A"
     )
+
     rsi_text = (
         f"{rsi:.1f}"
         if rsi is not None
@@ -154,7 +159,6 @@ def _atomic_write_json(
             temporary,
             path,
         )
-
     finally:
         if temporary.exists():
             temporary.unlink()
@@ -169,6 +173,7 @@ def _save_signal_state(signal) -> None:
 
         try:
             payload = json.loads(raw)
+
         except (
             TypeError,
             json.JSONDecodeError,
@@ -206,6 +211,7 @@ def _load_signal_state() -> dict:
                 encoding="utf-8",
             )
         )
+
     except (
         OSError,
         json.JSONDecodeError,
@@ -253,15 +259,19 @@ def _load_signal_state() -> dict:
         entry_price = float(
             payload["entry_price"]
         )
+
         quantity = int(
             payload["quantity"]
         )
+
         lots = int(
             payload["lots"]
         )
+
         strike = float(
             payload["strike"]
         )
+
     except (
         TypeError,
         ValueError,
@@ -306,6 +316,7 @@ def _load_signal_state() -> dict:
         date.fromisoformat(
             str(payload["expiry"])
         )
+
     except ValueError as exc:
         raise LiveMarketDataError(
             "Stored BTST expiry is invalid."
@@ -370,8 +381,10 @@ def _format_sell_message(
 
     if pnl > 0:
         result = "🟢 PROFIT"
+
     elif pnl < 0:
         result = "🔴 LOSS"
+
     else:
         result = "⚪ BREAKEVEN"
 
@@ -460,6 +473,7 @@ def _load_existing_exit_record():
                 encoding="utf-8",
             )
         )
+
     except (
         OSError,
         json.JSONDecodeError,
@@ -578,16 +592,24 @@ def run_3pm() -> None:
 
     print(message)
 
+    # NO TRADE is also a valid daily signal.
+    # Send it to Telegram so the 3 PM process always
+    # reports the strategy decision.
     if result.signal.decision != "BUY":
+        send_alert(message)
         return
 
+    # For BUY, persist the position before sending Telegram.
     _save_signal_state(
         result.signal
     )
 
     try:
         send_alert(message)
+
     except Exception:
+        # Telegram failed, so do not leave an unsent
+        # BUY position marked as active.
         _remove_active_state()
         raise
 
@@ -618,6 +640,7 @@ def run_930() -> None:
         expiry = date.fromisoformat(
             str(position["expiry"])
         )
+
     except ValueError as exc:
         raise LiveMarketDataError(
             "Stored BTST expiry is invalid."
@@ -672,6 +695,7 @@ def run_930() -> None:
 
     try:
         send_alert(message)
+
     except Exception:
         raise
 
@@ -735,3 +759,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+```
