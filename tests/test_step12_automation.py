@@ -82,7 +82,6 @@ def test_run_3pm_builds_live_signal(
     main.run_3pm()
 
     assert len(calls) == 1
-
     assert calls[0]["capital"] == 100000.0
     assert calls[0]["lot_size"] == 65
 
@@ -265,6 +264,7 @@ def test_run_3pm_saves_buy_state(
 
 def test_run_3pm_rejects_duplicate_buy_state(
     monkeypatch,
+    tmp_path,
 ):
     monkeypatch.setattr(
         main,
@@ -284,10 +284,16 @@ def test_run_3pm_rejects_duplicate_buy_state(
         lambda **kwargs: FakeResult(),
     )
 
+    state_file = tmp_path / "live_btst_signal.json"
+    state_file.write_text(
+        '{"decision":"BUY"}',
+        encoding="utf-8",
+    )
+
     monkeypatch.setattr(
-        main.STATE_FILE,
-        "exists",
-        lambda: True,
+        main,
+        "STATE_FILE",
+        state_file,
     )
 
     try:
