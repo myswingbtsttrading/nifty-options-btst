@@ -1,37 +1,53 @@
 from __future__ import annotations
 
-import requests
+import os
 
-from config import (
-    TELEGRAM_CHAT_ID,
-    TELEGRAM_TOKEN,
-)
+import requests
 
 
 TELEGRAM_API_TIMEOUT = 30
 
 
+def _telegram_token() -> str:
+    return os.getenv(
+        "TELEGRAM_TOKEN",
+        "",
+    ).strip()
+
+
+def _telegram_chat_id() -> str:
+    return os.getenv(
+        "TELEGRAM_CHAT_ID",
+        "",
+    ).strip()
+
+
 def send_alert(message: str) -> None:
-    if not TELEGRAM_TOKEN:
+    token = _telegram_token()
+    chat_id = _telegram_chat_id()
+
+    if not token:
         raise RuntimeError(
-            "TELEGRAM_TOKEN is not configured."
+            "TELEGRAM_TOKEN is not configured. "
+            "Add TELEGRAM_TOKEN to GitHub Actions repository secrets."
         )
 
-    if not TELEGRAM_CHAT_ID:
+    if not chat_id:
         raise RuntimeError(
-            "TELEGRAM_CHAT_ID is not configured."
+            "TELEGRAM_CHAT_ID is not configured. "
+            "Add TELEGRAM_CHAT_ID to GitHub Actions repository secrets."
         )
 
     url = (
         "https://api.telegram.org/bot"
-        + TELEGRAM_TOKEN
+        + token
         + "/sendMessage"
     )
 
     response = requests.post(
         url,
         json={
-            "chat_id": TELEGRAM_CHAT_ID,
+            "chat_id": chat_id,
             "text": message,
         },
         timeout=TELEGRAM_API_TIMEOUT,
