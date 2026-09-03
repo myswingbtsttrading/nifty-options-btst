@@ -158,6 +158,7 @@ def _atomic_write_json(
             temporary,
             path,
         )
+
     finally:
         if temporary.exists():
             temporary.unlink()
@@ -591,25 +592,26 @@ def run_3pm() -> None:
 
     print(message)
 
-    # NO TRADE is also a valid daily signal.
-    # Send it to Telegram so the 3 PM process always
-    # reports the strategy decision.
-    if result.signal.decision != "BUY":
-        send_alert(message)
-        return
+    # A BUY creates an active BTST position.
+    # Persist it before sending Telegram so the
+    # position cannot be lost if the process ends
+    # immediately after the alert.
+    if result.signal.decision == "BUY":
+        _save_signal_state(
+            result.signal
+        )
 
-    # For BUY, persist the position before sending Telegram.
-    _save_signal_state(
-        result.signal
-    )
-
+    # Both BUY and NO TRADE are valid daily outcomes.
+    # Always send the 3 PM decision to Telegram.
     try:
         send_alert(message)
 
     except Exception:
-        # Telegram failed, so do not leave an unsent
-        # BUY position marked as active.
-        _remove_active_state()
+        # Only BUY creates state that needs rollback.
+        # NO TRADE creates no active position.
+        if result.signal.decision == "BUY":
+            _remove_active_state()
+
         raise
 
 
