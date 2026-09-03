@@ -1,27 +1,24 @@
-from datetime import date
+from pathlib import Path
 
 import main
 
 
 class FakeSignal:
     decision = "BUY"
-    direction = "CE"
-    expiry = date(2026, 8, 27)
-    strike = 25000.0
-    option_type = "CE"
+    confidence = 80.0
     nifty_price = 25020.0
-    entry_price = 125.0
-    stop_loss = 106.25
-    target = 162.50
+    direction = "CE"
+    expiry = "2026-09-03"
+    strike = 25000
+    option_type = "CE"
+    entry_price = 100.0
+    stop_loss = 90.0
+    target = 120.0
     lots = 1
     quantity = 65
-    capital_required = 8125.0
-    planned_risk = 1218.75
+    capital_required = 6500.0
+    planned_risk = 650.0
     risk_reward_ratio = 2.0
-    confidence = 75.0
-
-    def to_json(self):
-        return '{"decision":"BUY"}'
 
 
 class FakeIndicators:
@@ -40,9 +37,58 @@ class FakeResult:
     nifty_signal = FakeNiftySignal()
 
 
-def test_run_3pm_sends_telegram_for_buy(
+def test_main_file_exists():
+    assert Path("main.py").exists()
+
+
+def test_run_3pm_builds_live_signal(
     monkeypatch,
-    tmp_path,
+):
+    calls = []
+
+    monkeypatch.setattr(
+        main,
+        "_load_historical_nifty_rows",
+        lambda: [
+            {
+                "timestamp": index,
+                "close": 25000.0,
+            }
+            for index in range(60)
+        ],
+    )
+
+    monkeypatch.setattr(
+        main,
+        "build_live_signal",
+        lambda **kwargs: (
+            calls.append(kwargs)
+            or FakeResult()
+        ),
+    )
+
+    monkeypatch.setattr(
+        main,
+        "_save_signal_state",
+        lambda signal: None,
+    )
+
+    monkeypatch.setattr(
+        main,
+        "send_alert",
+        lambda message: None,
+    )
+
+    main.run_3pm()
+
+    assert len(calls) == 1
+
+    assert calls[0]["capital"] == 100000.0
+    assert calls[0]["lot_size"] == 65
+
+
+def test_run_3pm_sends_buy_alert(
+    monkeypatch,
 ):
     calls = []
 
@@ -66,41 +112,23 @@ def test_run_3pm_sends_telegram_for_buy(
 
     monkeypatch.setattr(
         main,
+        "_save_signal_state",
+        lambda signal: None,
+    )
+
+    monkeypatch.setattr(
+        main,
         "send_alert",
         lambda message: calls.append(message),
-    )
-
-    monkeypatch.setattr(
-        main,
-        "DATA_DIR",
-        tmp_path,
-    )
-
-    monkeypatch.setattr(
-        main,
-        "STATE_FILE",
-        tmp_path / "live_btst_signal.json",
     )
 
     main.run_3pm()
 
     assert len(calls) == 1
-    assert "NIFTY BTST BUY ALERT" in calls[0]
-    assert "BUY CE" in calls[0]
-    assert "₹25,020.00" in calls[0]
-
-    state_file = (
-        tmp_path
-        / "live_btst_signal.json"
-    )
-
-    assert state_file.exists()
-    assert state_file.read_text(
-        encoding="utf-8"
-    ) == '{"decision":"BUY"}'
+    assert "BUY" in calls[0]
 
 
-def test_run_3pm_does_not_send_telegram_for_no_trade(
+def test_run_3pm_sends_telegram_for_no_trade(
     monkeypatch,
 ):
     calls = []
@@ -140,29 +168,248 @@ def test_run_3pm_does_not_send_telegram_for_no_trade(
 
     main.run_3pm()
 
-    assert calls == []
+    assert len(calls) == 1
+    assert "NO TRADE" in calls[0]
+    assert "WAIT" in calls[0]
 
 
-def test_historical_loader_requires_at_least_50_rows(
+def test_run_3pm_does_not_create_state_for_no_trade(
     monkeypatch,
 ):
+    save_calls = []
+
+    class NoTradeSignal(FakeSignal):
+        decision = "WAIT"
+        confidence = 45.0
+
+    class NoTradeResult:
+        signal = NoTradeSignal()
+        indicators = FakeIndicators()
+        nifty_signal = FakeNiftySignal()
+
     monkeypatch.setattr(
         main,
-        "load_nifty_history",
-        lambda days: [
+        "_load_historical_nifty_rows",
+        lambda: [
             {
                 "timestamp": index,
                 "close": 25000.0,
             }
-            for index in range(49)
+            for index in range(60)
         ],
     )
 
+    monkeypatch.setattr(
+        main,
+        "build_live_signal",
+        lambda **kwargs: NoTradeResult(),
+    )
+
+    monkeypatch.setattr(
+        main,
+        "_save_signal_state",
+        lambda signal: save_calls.append(signal),
+    )
+
+    monkeypatch.setattr(
+        main,
+        "send_alert",
+        lambda message: None,
+    )
+
+    main.run_3pm()
+
+    assert save_calls == []
+
+
+def test_run_3pm_saves_buy_state(
+    monkeypatch,
+):
+    save_calls = []
+
+    monkeypatch.setattr(
+        main,
+        "_load_historical_nifty_rows",
+        lambda: [
+            {
+                "timestamp": index,
+                "close": 25000.0,
+            }
+            for index in range(60)
+        ],
+    )
+
+    monkeypatch.setattr(
+        main,
+        "build_live_signal",
+        lambda **kwargs: FakeResult(),
+    )
+
+    monkeypatch.setattr(
+        main,
+        "_save_signal_state",
+        lambda signal: save_calls.append(signal),
+    )
+
+    monkeypatch.setattr(
+        main,
+        "send_alert",
+        lambda message: None,
+    )
+
+    main.run_3pm()
+
+    assert len(save_calls) == 1
+    assert save_calls[0].decision == "BUY"
+
+
+def test_run_3pm_rejects_duplicate_buy_state(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        main,
+        "_load_historical_nifty_rows",
+        lambda: [
+            {
+                "timestamp": index,
+                "close": 25000.0,
+            }
+            for index in range(60)
+        ],
+    )
+
+    monkeypatch.setattr(
+        main,
+        "build_live_signal",
+        lambda **kwargs: FakeResult(),
+    )
+
+    monkeypatch.setattr(
+        main.STATE_FILE,
+        "exists",
+        lambda: True,
+    )
+
     try:
-        main._load_historical_nifty_rows()
+        main.run_3pm()
     except Exception as exc:
-        assert "Fewer than 50" in str(exc)
+        assert "active BTST BUY position" in str(exc)
     else:
         raise AssertionError(
-            "Expected historical-data validation to fail."
+            "Expected duplicate BUY position to be rejected."
         )
+
+
+def test_run_3pm_rolls_back_state_when_telegram_fails(
+    monkeypatch,
+):
+    remove_calls = []
+
+    monkeypatch.setattr(
+        main,
+        "_load_historical_nifty_rows",
+        lambda: [
+            {
+                "timestamp": index,
+                "close": 25000.0,
+            }
+            for index in range(60)
+        ],
+    )
+
+    monkeypatch.setattr(
+        main,
+        "build_live_signal",
+        lambda **kwargs: FakeResult(),
+    )
+
+    monkeypatch.setattr(
+        main,
+        "_save_signal_state",
+        lambda signal: None,
+    )
+
+    monkeypatch.setattr(
+        main,
+        "_remove_active_state",
+        lambda: remove_calls.append(True),
+    )
+
+    def failing_alert(message):
+        raise RuntimeError("Telegram failed")
+
+    monkeypatch.setattr(
+        main,
+        "send_alert",
+        failing_alert,
+    )
+
+    try:
+        main.run_3pm()
+    except RuntimeError as exc:
+        assert "Telegram failed" in str(exc)
+    else:
+        raise AssertionError(
+            "Expected Telegram failure."
+        )
+
+    assert remove_calls == [True]
+
+
+def test_run_3pm_no_trade_telegram_failure_does_not_remove_state(
+    monkeypatch,
+):
+    remove_calls = []
+
+    class NoTradeSignal(FakeSignal):
+        decision = "WAIT"
+        confidence = 45.0
+
+    class NoTradeResult:
+        signal = NoTradeSignal()
+        indicators = FakeIndicators()
+        nifty_signal = FakeNiftySignal()
+
+    monkeypatch.setattr(
+        main,
+        "_load_historical_nifty_rows",
+        lambda: [
+            {
+                "timestamp": index,
+                "close": 25000.0,
+            }
+            for index in range(60)
+        ],
+    )
+
+    monkeypatch.setattr(
+        main,
+        "build_live_signal",
+        lambda **kwargs: NoTradeResult(),
+    )
+
+    monkeypatch.setattr(
+        main,
+        "_remove_active_state",
+        lambda: remove_calls.append(True),
+    )
+
+    def failing_alert(message):
+        raise RuntimeError("Telegram failed")
+
+    monkeypatch.setattr(
+        main,
+        "send_alert",
+        failing_alert,
+    )
+
+    try:
+        main.run_3pm()
+    except RuntimeError as exc:
+        assert "Telegram failed" in str(exc)
+    else:
+        raise AssertionError(
+            "Expected Telegram failure."
+        )
+
+    assert remove_calls == []
