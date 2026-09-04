@@ -1,3 +1,4 @@
+```python
 from __future__ import annotations
 
 import argparse
@@ -568,6 +569,18 @@ def _remove_active_state() -> None:
         STATE_FILE.unlink()
 
 
+def _format_no_position_exit_message() -> str:
+    return (
+        "NIFTY BTST EXIT CHECK\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "⚪ NO POSITION\n\n"
+        "No BTST BUY position was created "
+        "by the previous 3 PM signal.\n\n"
+        "No option needs to be sold.\n"
+        "9:30 AM exit process completed successfully."
+    )
+
+
 def run_3pm() -> None:
     historical_rows = _load_historical_nifty_rows()
 
@@ -616,6 +629,18 @@ def run_3pm() -> None:
 
 
 def run_930() -> None:
+    # A previous 3 PM NO TRADE is a normal outcome.
+    # In that case there is no position to exit and
+    # the 9:30 workflow should complete successfully.
+    if not STATE_FILE.exists():
+        message = _format_no_position_exit_message()
+
+        print(message)
+
+        send_alert(message)
+
+        return
+
     position = _load_signal_state()
 
     existing_exit = _load_existing_exit_record()
@@ -760,3 +785,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+```
