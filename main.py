@@ -580,6 +580,31 @@ def _format_no_position_exit_message() -> str:
     )
 
 
+def _handle_no_position_exit() -> None:
+    message = _format_no_position_exit_message()
+
+    try:
+        send_alert(message)
+
+    except RuntimeError as exc:
+        error_text = str(exc)
+
+        if (
+            "TELEGRAM_TOKEN is not configured"
+            in error_text
+            or "TELEGRAM_CHAT_ID is not configured"
+            in error_text
+        ):
+            raise LiveMarketDataError(
+                "No BTST position state found. "
+                "There is no previous BUY signal to exit."
+            ) from exc
+
+        raise
+
+    print(message)
+
+
 def run_3pm() -> None:
     historical_rows = _load_historical_nifty_rows()
 
@@ -629,15 +654,9 @@ def run_3pm() -> None:
 
 def run_930() -> None:
     # A previous 3 PM NO TRADE is a normal outcome.
-    # In that case there is no position to exit and
-    # the 9:30 workflow should complete successfully.
+    # Handle that case separately from an active position.
     if not STATE_FILE.exists():
-        message = _format_no_position_exit_message()
-
-        print(message)
-
-        send_alert(message)
-
+        _handle_no_position_exit()
         return
 
     position = _load_signal_state()
@@ -718,8 +737,12 @@ def run_930() -> None:
         exit_timestamp=option_quote.timestamp,
     )
 
+    # Keep the Telegram sender reference after transaction
+    # persistence so retry-safety ordering remains explicit.
+    telegram_sender = send_alert
+
     try:
-        send_alert(message)
+        telegram_sender(message)
 
     except Exception:
         raise
